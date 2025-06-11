@@ -1,0 +1,7 @@
+transformers
+datasets
+vllm
+latex2sympy2_extended
+pylatexenc
+umap-learn
+accelerate
