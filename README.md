@@ -21,3 +21,4 @@ src: source code
     utils.py: other functions
 asset: folder to save responses
 models: folder to save model weights
+scripts: bash file to inference

@@ -1,0 +1,13 @@
+python ./src/inference.py \
+    --model_name "Qwen/Qwen2.5-1.5B" \
+    --dataset_name "Maxwell-Jia/AIME_2024" \
+    --output_dir "./asset/response/" \
+    --prompt "Please reason step by step, and put your final answer within \\boxed{{}}. <|im_start|>user: {problems}<|im_end|>\n<|im_start|>assistant:" \
+    --max_new_tokens 32784 \
+    --temperature 0.6 \
+    --dataset_ratio 1 \
+    --do_sample \
+    --use_cache \
+    --injection \
+    --injection_layer 20 \
+    --injection_alpha -0.100
