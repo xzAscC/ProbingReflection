@@ -1,49 +1,70 @@
 # ProbingReflection
-Source Code of paper "From Emergence to Control: Probing and Modulating Self-Reflection in Language Models"
 
-## Requirement
+Source code for the paper **"From Emergence to Control: Probing and Modulating Self-Reflection in Language Models"**
 
-- transformers
-- datasets
-- vllm
-- latex2sympy2_extended
-- pylatexenc
-- umap-learn
+## Overview
 
-## Folder Architecture
+This project investigates self-reflection in Large Language Models (LLMs) through probing and steering techniques. We explore how reflection behaviors emerge and how they can be controlled through vector-based interventions.
 
-```text
-src: source code
-    acc_length_rel.py: explore the relationship between length and acc
-    math_grader.py: evaluation the math problem
-    inference.py: inference with original model and inserted model
-    save_insert_model.py: use vector to do insertion
-    utils.py: other functions
-asset: folder to save responses
-models: folder to save model weights
-scripts: bash file to inference
-```
+## Key Concepts
 
-## Getting Started
+- **Probing Vectors**: Techniques to detect and measure self-reflection patterns in model activations
+- **Model Insertion**: Methods for injecting steering vectors to modulate reflection behavior
+- **Reflection Analysis**: Frameworks for evaluating and understanding model self-reflection
 
-### Running Inference
+## Installation
 
-To run inference with the original model:
 ```bash
-python src/inference.py --model [MODEL_NAME] --output_dir [OUTPUT_PATH]
+uv sync
 ```
 
-To run inference with the inserted model:
+## Development
+
 ```bash
-python src/inference.py --model [MODEL_NAME] --injection  --injection_layer [INJECTION_LAYER]  --injection_alpha [INJECTION_ALPHA] --output_dir [OUTPUT_PATH]
+# Lint check
+uv run ruff check src/ tests/
+
+# Format
+uv run ruff format src/ tests/
+
+# Type check
+uv run mypy src/
+
+# Run tests
+uv run pytest
 ```
 
-### Model Insertion
+## Project Structure
 
-To insert vectors into a model:
-```bash
-python src/save_insert_model.py --model [MODEL_NAME] --output_dir [OUTPUT_DIR]
+```
+.
+├── src/probing_reflection/    # Source code
+│   ├── __init__.py
+│   └── py.typed
+├── tests/                     # Test files
+├── docs/                      # Documentation
+│   └── design-docs/           # Design documents
+├── AGENTS.md                  # AI agent instructions
+├── ARCHITECTURE.md            # System architecture
+└── pyproject.toml             # Project configuration
 ```
 
+## Research Workflow
 
-For more details, refer to the scripts in the `scripts` directory.
+This project follows an AI-assisted research workflow. See AGENTS.md for detailed instructions on how AI agents should work in this repository.
+
+## Citation
+
+If you use this code, please cite:
+
+```bibtex
+@article{probing_reflection_2024,
+  title={From Emergence to Control: Probing and Modulating Self-Reflection in Language Models},
+  author={[Authors]},
+  year={2024}
+}
+```
+
+## License
+
+[Add your license here]
