@@ -35,10 +35,10 @@ Replace `ai_research_template` with your project name:
 
 ```bash
 # Update all references
-find . -type f \( -name "*.py" -o -name "*.toml" \) -exec sed -i 's/ai_research_template/YOUR_PROJECT_NAME/g' {} +
+find . -type f \( -name "*.py" -o -name "*.toml" \) -exec sed -i 's/probing_reflection/YOUR_PROJECT_NAME/g' {} +
 
 # Rename the source directory
-mv src/ai_research_template src/YOUR_PROJECT_NAME
+mv src/probing_reflection src/YOUR_PROJECT_NAME
 ```
 
 ### 4. Verify Everything Works
