@@ -53,9 +53,9 @@ Before opening a PR, ALL of these must pass:
 - Use ESM-style imports (from x import y)
 - Group imports: stdlib → third-party → local
 - Use type hints on ALL function parameters and returns
-- Never use `Any` — use `unknown` patterns or proper types
+- Never use `Any` — use `object`, `Protocol`, or generic `TypeVar` patterns instead
 - Fail fast on invalid input
-- Throw typed/domain-specific errors
+- Raise typed/domain-specific exceptions
 - Preserve original error as `cause` when wrapping
 
 ## 5) When Writing Tests

@@ -31,7 +31,7 @@ uv sync
 
 ### 3. Rename the Package
 
-Replace `ai_research_template` with your project name:
+Replace `probing_reflection` with your project name:
 
 ```bash
 # Update all references
@@ -68,7 +68,8 @@ uv run pytest
 | `pyproject.toml` | Project name, description, dependencies |
 | `README.md` | Project description, remove template-specific content |
 | `ARCHITECTURE.md` | Your system architecture |
-| `AGENTS.md` | Package references (line 35: `packages = ["YOUR_PROJECT_NAME"]`) |
+| `AGENTS.md` | Package references |
+| `pyproject.toml` | packages = ["YOUR_PROJECT_NAME"] on line 35 |
 | `.sisyphus/roadmap.md` | Your project roadmap |
 | `.github/` | Update issue templates if needed |
 

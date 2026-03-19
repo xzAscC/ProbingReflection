@@ -8,6 +8,7 @@ immutable (frozen dataclasses) to ensure reproducibility.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TypedDict
 
 
@@ -39,7 +40,7 @@ class ReflectionResult:
 
     sample_id: str
     reflection_score: float
-    metadata: dict[str, str] = field(default_factory=dict)
+    metadata: MappingProxyType[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
 
 class ContrastivePair(TypedDict):

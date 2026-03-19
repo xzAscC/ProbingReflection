@@ -20,9 +20,10 @@ ProbingReflection investigates self-reflection in Large Language Models through 
 - `tests/` — Test files mirroring source structure
 - `docs/` — Documentation including:
   - `docs/design-docs/` — Design and experiment documentation
+  - `docs/QUALITY_SCORE.md` — Quality tracking metrics
+- `.sisyphus/` — Work management including:
   - `.sisyphus/plans/` — Execution plans for tasks
   - `.sisyphus/roadmap.md` — Project roadmap
-  - `docs/QUALITY_SCORE.md` — Quality tracking metrics
 
 ## 4) Three-Tier Boundaries
 
