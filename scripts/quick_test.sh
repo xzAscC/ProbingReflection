@@ -14,19 +14,19 @@ echo "Model: $MODEL_NAME"
 echo ""
 
 # Install dependencies
-echo "[1/4] Installing dependencies..."
+echo "[1/5] Installing dependencies..."
 uv sync
 
 # Lint check
-echo "[2/4] Running lint check..."
+echo "[2/5] Running lint check..."
 uv run ruff check src/ tests/
 
 # Format check
-echo "[3/4] Running format check..."
+echo "[3/5] Running format check..."
 uv run ruff format --check src/ tests/
 
 # Type check
-echo "[4/4] Running type check..."
+echo "[4/5] Running type check..."
 uv run mypy src/
 
 # Run tests
