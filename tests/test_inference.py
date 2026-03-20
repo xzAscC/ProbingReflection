@@ -93,9 +93,8 @@ class TestInference:
         import tempfile
         from unittest.mock import MagicMock, patch
 
-        from probing_reflection.inference import run_inference
-
         from probing_reflection import InferenceConfig
+        from probing_reflection.inference import run_inference
 
         # Create a temporary output path
         with tempfile.TemporaryDirectory() as tmpdir:
