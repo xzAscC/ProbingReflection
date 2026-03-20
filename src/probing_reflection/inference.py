@@ -8,17 +8,22 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import torch
 from datasets import load_dataset  # type: ignore[import-untyped]
 from tqdm import tqdm  # type: ignore[import-untyped]
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+)
 
 from probing_reflection.types import InferenceConfig
 
 
-def prepare_batch(tokenizer: Any, problems: list[str]) -> dict[str, Any]:
+def prepare_batch(tokenizer: PreTrainedTokenizerBase, problems: list[str]) -> dict[str, list[int]]:
     """Prepare a batch of problems for model inference.
 
     Sets up left padding for Qwen model compatibility.
@@ -37,7 +42,7 @@ def prepare_batch(tokenizer: Any, problems: list[str]) -> dict[str, Any]:
 
     result = tokenizer(problems, padding=True, return_tensors=None)
 
-    return cast(dict[str, Any], result)
+    return cast(dict[str, list[int]], result)
 
 
 def format_cot_prompt(problem: str) -> str:
@@ -55,7 +60,7 @@ def format_cot_prompt(problem: str) -> str:
     )
 
 
-def load_model(config: InferenceConfig) -> tuple[Any, Any]:
+def load_model(config: InferenceConfig) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
     """Load model and tokenizer with bfloat16 precision.
 
     Args:
@@ -69,14 +74,15 @@ def load_model(config: InferenceConfig) -> tuple[Any, Any]:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    dtype = torch.bfloat16 if device == "cuda" else torch.float32
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
 
     model = AutoModelForCausalLM.from_pretrained(
         config.model_name,
         torch_dtype=dtype,
     )
     model.eval()  # type: ignore[no-untyped-call]
+    model = model.to(device)  # type: ignore[arg-type]
 
     return model, tokenizer
 
@@ -100,7 +106,7 @@ def run_inference(config: InferenceConfig) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     batch_size = config.batch_size
-    results: list[dict[str, Any]] = []
+    results: list[dict[str, str | int]] = []
     num_samples = len(dataset)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -118,7 +124,7 @@ def run_inference(config: InferenceConfig) -> Path:
 
         try:
             with torch.no_grad():
-                outputs = model.generate(
+                outputs = model.generate(  # type: ignore[operator]
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     max_new_tokens=config.max_new_tokens,
@@ -134,7 +140,7 @@ def run_inference(config: InferenceConfig) -> Path:
                 single_mask = single_input["attention_mask"].to(device)
 
                 with torch.no_grad():
-                    output = model.generate(
+                    output = model.generate(  # type: ignore[operator]
                         input_ids=single_ids,
                         attention_mask=single_mask,
                         max_new_tokens=config.max_new_tokens,

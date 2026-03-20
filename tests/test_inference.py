@@ -108,9 +108,12 @@ class TestInference:
             mock_tokenizer = MagicMock()
 
             # Mock torch.cuda.is_available to return False (CPU mode)
-            with patch("torch.cuda.is_available", return_value=False), patch(
-                "probing_reflection.inference.load_model",
-                return_value=(mock_model, mock_tokenizer),
+            with (
+                patch("torch.cuda.is_available", return_value=False),
+                patch(
+                    "probing_reflection.inference.load_model",
+                    return_value=(mock_model, mock_tokenizer),
+                ),
             ):
                 # Call run_inference
                 run_inference(config)
