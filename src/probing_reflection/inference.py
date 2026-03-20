@@ -75,7 +75,6 @@ def load_model(config: InferenceConfig) -> tuple[Any, Any]:
     model = AutoModelForCausalLM.from_pretrained(
         config.model_name,
         torch_dtype=dtype,
-        device_map=device,
     )
     model.eval()  # type: ignore[no-untyped-call]
 
