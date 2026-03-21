@@ -13,7 +13,13 @@ from probing_reflection.reflection_diagnosis import (
     write_analysis_report,
     write_analyzed_jsonl,
 )
-from probing_reflection.types import EvaluationConfig, EvaluationReport, ReflectionDiagnosisConfig
+from probing_reflection.steering_vectors import extract_steering_vectors
+from probing_reflection.types import (
+    EvaluationConfig,
+    EvaluationReport,
+    ExtractVectorsConfig,
+    ReflectionDiagnosisConfig,
+)
 
 
 def format_report(report: EvaluationReport) -> str:
@@ -122,6 +128,48 @@ def create_parser() -> argparse.ArgumentParser:
         help="Judge model name (default: Qwen/Qwen3.5-27B)",
     )
 
+    extract_parser = subparsers.add_parser(
+        "extract-vectors",
+        help="Extract steering vectors from model activations",
+    )
+    extract_parser.add_argument(
+        "--input",
+        "-i",
+        required=True,
+        help="Path to input JSONL file with model outputs",
+    )
+    extract_parser.add_argument(
+        "--model",
+        "-m",
+        default="Qwen/Qwen2.5-0.5B",
+        help="Model name (default: Qwen/Qwen2.5-0.5B)",
+    )
+    extract_parser.add_argument(
+        "--layers",
+        "-l",
+        required=True,
+        help="Layer indices, comma-separated (e.g., '10,15,20')",
+    )
+    extract_parser.add_argument(
+        "--output",
+        "-o",
+        default="steering_vectors.pt",
+        help="Output .pt file path (default: steering_vectors.pt)",
+    )
+    extract_parser.add_argument(
+        "--min-samples",
+        type=int,
+        default=10,
+        help="Minimum samples in R/N sets (default: 10)",
+    )
+    extract_parser.add_argument(
+        "--batch-size",
+        "-b",
+        type=int,
+        default=4,
+        help="Batch size for extraction (default: 4)",
+    )
+
     return parser
 
 
@@ -196,11 +244,38 @@ def handle_reflection_diagnose(args: argparse.Namespace) -> None:
     print(f"Report saved to {report_path}")
 
 
+def handle_extract_vectors(args: argparse.Namespace) -> None:
+    """Run steering vector extraction with parsed arguments.
+
+    Args:
+        args: Parsed command line arguments.
+    """
+    layer_indices = tuple(int(x.strip()) for x in args.layers.split(","))
+
+    config = ExtractVectorsConfig(
+        input_path=args.input,
+        model_name=args.model,
+        layer_indices=layer_indices,
+        output_path=args.output,
+        min_samples=args.min_samples,
+        batch_size=args.batch_size,
+    )
+
+    print(f"Extracting steering vectors from {args.input}...")
+    result = extract_steering_vectors(config)
+
+    print("\n=== Steering Vector Extraction Complete ===")
+    print(f"R samples: {result['metadata']['r_count']}")
+    print(f"N samples: {result['metadata']['n_count']}")
+    print(f"Layers: {result['metadata']['layer_indices']}")
+    print(f"Output: {args.output}")
+
+
 def main() -> None:
     """Parse arguments and dispatch to appropriate subcommand."""
     parser = create_parser()
 
-    valid_commands = ("inference", "evaluate", "reflection-diagnose")
+    valid_commands = ("inference", "evaluate", "reflection-diagnose", "extract-vectors")
     if len(sys.argv) == 1 or (len(sys.argv) > 1 and sys.argv[1] not in valid_commands):
         sys.argv.insert(1, "inference")
 
@@ -210,6 +285,8 @@ def main() -> None:
         handle_evaluate(args)
     elif args.command == "reflection-diagnose":
         handle_reflection_diagnose(args)
+    elif args.command == "extract-vectors":
+        handle_extract_vectors(args)
     else:
         handle_inference(args)
 

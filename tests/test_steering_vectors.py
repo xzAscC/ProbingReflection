@@ -9,7 +9,7 @@ steering_vectors module is not yet implemented.
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
@@ -20,10 +20,11 @@ from probing_reflection.steering_vectors import (
     compute_difference_in_means,
     extract_activation_at_position,
     extract_batch_activations,
+    extract_steering_vectors,
     find_reflection_token_position,
     save_steering_vectors,
 )
-from probing_reflection.types import SampleWithReflection
+from probing_reflection.types import ExtractVectorsConfig, SampleWithReflection
 
 
 class TestClassify:
@@ -550,22 +551,287 @@ class TestSave:
 class TestPipeline:
     """Tests for extract_steering_vectors end-to-end function."""
 
+    def _create_mock_tokenizer(self, seq_len: int) -> MagicMock:
+        """Helper to create a properly configured tokenizer mock."""
+        mock_tokenizer = MagicMock()
+        mock_tokenizer.encode.return_value = list(range(seq_len))
+        mock_tokenizer.convert_ids_to_tokens.return_value = ["Wait"] + ["token"] * (seq_len - 1)
+        mock_tokenizer.return_value = {"input_ids": Tensor([[1] * seq_len]).long()}
+        return mock_tokenizer
+
+    def _create_mock_model(self, hidden_dim: int, seq_len: int, num_layers: int) -> MagicMock:
+        """Helper to create a properly configured model mock."""
+        mock_model = MagicMock()
+        mock_model.device = torch.device("cpu")
+        mock_hidden = torch.randn(1, seq_len, hidden_dim)
+        mock_output = MagicMock()
+        mock_output.hidden_states = (None,) + (mock_hidden,) * num_layers
+        mock_model.return_value = mock_output
+        mock_model.to.return_value = mock_model
+        return mock_model
+
     def test_pipeline_basic(self, tmp_path: Path) -> None:
         """extract_steering_vectors should run full pipeline."""
-        pytest.skip("extract_steering_vectors not yet implemented")
+        input_file = tmp_path / "test.jsonl"
+        samples: list[SampleWithReflection] = [
+            {
+                "problem_id": "r1",
+                "problem": "test",
+                "generated": "Wait, this is a test.",
+                "reference_answer": "answer",
+                "reflection_tokens": [],
+                "reflection_count": 1,
+                "reflection_density": 0.1,
+            },
+            {
+                "problem_id": "n1",
+                "problem": "test",
+                "generated": "This is simple.",
+                "reference_answer": "answer",
+                "reflection_tokens": [],
+                "reflection_count": 0,
+                "reflection_density": 0.0,
+            },
+        ]
+        with open(input_file, "w") as f:
+            for sample in samples:
+                f.write(json.dumps(sample) + "\n")
+
+        config = ExtractVectorsConfig(
+            input_path=str(input_file),
+            model_name="test-model",
+            layer_indices=(0, 5),
+            output_path=str(tmp_path / "output.pt"),
+            min_samples=1,
+            batch_size=1,
+        )
+
+        mock_model = self._create_mock_model(hidden_dim=64, seq_len=4, num_layers=12)
+        mock_tokenizer = self._create_mock_tokenizer(seq_len=4)
+
+        with (
+            patch("probing_reflection.steering_vectors.AutoModelForCausalLM") as mock_model_cls,
+            patch("probing_reflection.steering_vectors.AutoTokenizer") as mock_tokenizer_cls,
+        ):
+            mock_model_cls.from_pretrained.return_value = mock_model
+            mock_tokenizer_cls.from_pretrained.return_value = mock_tokenizer
+
+            result = extract_steering_vectors(config)
+
+        assert "vectors" in result
+        assert "metadata" in result
+        assert 0 in result["vectors"]
+        assert 5 in result["vectors"]
 
     def test_pipeline_returns_dict(self, tmp_path: Path) -> None:
         """extract_steering_vectors should return dict mapping layer to vector."""
-        pytest.skip("extract_steering_vectors not yet implemented")
+        input_file = tmp_path / "test.jsonl"
+        samples: list[SampleWithReflection] = [
+            {
+                "problem_id": "r1",
+                "problem": "test",
+                "generated": "Wait, test.",
+                "reference_answer": "answer",
+                "reflection_tokens": [],
+                "reflection_count": 1,
+                "reflection_density": 0.1,
+            },
+            {
+                "problem_id": "n1",
+                "problem": "test",
+                "generated": "Simple output.",
+                "reference_answer": "answer",
+                "reflection_tokens": [],
+                "reflection_count": 0,
+                "reflection_density": 0.0,
+            },
+        ]
+        with open(input_file, "w") as f:
+            for sample in samples:
+                f.write(json.dumps(sample) + "\n")
+
+        config = ExtractVectorsConfig(
+            input_path=str(input_file),
+            model_name="test-model",
+            layer_indices=(3,),
+            output_path=str(tmp_path / "output.pt"),
+            min_samples=1,
+            batch_size=1,
+        )
+
+        hidden_dim = 128
+        mock_model = self._create_mock_model(hidden_dim=hidden_dim, seq_len=3, num_layers=5)
+        mock_tokenizer = self._create_mock_tokenizer(seq_len=3)
+
+        with (
+            patch("probing_reflection.steering_vectors.AutoModelForCausalLM") as mock_model_cls,
+            patch("probing_reflection.steering_vectors.AutoTokenizer") as mock_tokenizer_cls,
+        ):
+            mock_model_cls.from_pretrained.return_value = mock_model
+            mock_tokenizer_cls.from_pretrained.return_value = mock_tokenizer
+
+            result = extract_steering_vectors(config)
+
+        assert isinstance(result["vectors"], dict)
+        assert 3 in result["vectors"]
+        assert result["vectors"][3].shape == (hidden_dim,)
 
     def test_pipeline_multiple_layers(self, tmp_path: Path) -> None:
         """extract_steering_vectors should handle multiple layer indices."""
-        pytest.skip("extract_steering_vectors not yet implemented")
+        input_file = tmp_path / "test.jsonl"
+        samples: list[SampleWithReflection] = [
+            {
+                "problem_id": "r1",
+                "problem": "test",
+                "generated": "Wait, test.",
+                "reference_answer": "answer",
+                "reflection_tokens": [],
+                "reflection_count": 1,
+                "reflection_density": 0.1,
+            },
+            {
+                "problem_id": "n1",
+                "problem": "test",
+                "generated": "Simple.",
+                "reference_answer": "answer",
+                "reflection_tokens": [],
+                "reflection_count": 0,
+                "reflection_density": 0.0,
+            },
+        ]
+        with open(input_file, "w") as f:
+            for sample in samples:
+                f.write(json.dumps(sample) + "\n")
+
+        config = ExtractVectorsConfig(
+            input_path=str(input_file),
+            model_name="test-model",
+            layer_indices=(0, 5, 10),
+            output_path=str(tmp_path / "output.pt"),
+            min_samples=1,
+            batch_size=1,
+        )
+
+        mock_model = self._create_mock_model(hidden_dim=64, seq_len=3, num_layers=15)
+        mock_tokenizer = self._create_mock_tokenizer(seq_len=3)
+
+        with (
+            patch("probing_reflection.steering_vectors.AutoModelForCausalLM") as mock_model_cls,
+            patch("probing_reflection.steering_vectors.AutoTokenizer") as mock_tokenizer_cls,
+        ):
+            mock_model_cls.from_pretrained.return_value = mock_model
+            mock_tokenizer_cls.from_pretrained.return_value = mock_tokenizer
+
+            result = extract_steering_vectors(config)
+
+        assert 0 in result["vectors"]
+        assert 5 in result["vectors"]
+        assert 10 in result["vectors"]
+        assert result["metadata"]["layer_indices"] == (0, 5, 10)
 
     def test_pipeline_model_loading(self, tmp_path: Path) -> None:
         """extract_steering_vectors should load model from name or path."""
-        pytest.skip("extract_steering_vectors not yet implemented")
+        input_file = tmp_path / "test.jsonl"
+        samples: list[SampleWithReflection] = [
+            {
+                "problem_id": "r1",
+                "problem": "test",
+                "generated": "Wait, test.",
+                "reference_answer": "answer",
+                "reflection_tokens": [],
+                "reflection_count": 1,
+                "reflection_density": 0.1,
+            },
+            {
+                "problem_id": "n1",
+                "problem": "test",
+                "generated": "Simple.",
+                "reference_answer": "answer",
+                "reflection_tokens": [],
+                "reflection_count": 0,
+                "reflection_density": 0.0,
+            },
+        ]
+        with open(input_file, "w") as f:
+            for sample in samples:
+                f.write(json.dumps(sample) + "\n")
+
+        config = ExtractVectorsConfig(
+            input_path=str(input_file),
+            model_name="custom-model-path",
+            layer_indices=(0,),
+            output_path=str(tmp_path / "output.pt"),
+            min_samples=1,
+            batch_size=1,
+        )
+
+        mock_model = self._create_mock_model(hidden_dim=32, seq_len=3, num_layers=5)
+        mock_tokenizer = self._create_mock_tokenizer(seq_len=3)
+
+        with (
+            patch("probing_reflection.steering_vectors.AutoModelForCausalLM") as mock_model_cls,
+            patch("probing_reflection.steering_vectors.AutoTokenizer") as mock_tokenizer_cls,
+        ):
+            mock_model_cls.from_pretrained.return_value = mock_model
+            mock_tokenizer_cls.from_pretrained.return_value = mock_tokenizer
+
+            extract_steering_vectors(config)
+
+            mock_model_cls.from_pretrained.assert_called_once()
+            call_args = mock_model_cls.from_pretrained.call_args
+            assert call_args[0][0] == "custom-model-path"
+            assert "torch_dtype" in call_args[1]
+            mock_tokenizer_cls.from_pretrained.assert_called_once_with("custom-model-path")
 
     def test_pipeline_logging(self, tmp_path: Path) -> None:
         """extract_steering_vectors should log progress during extraction."""
-        pytest.skip("extract_steering_vectors not yet implemented")
+        input_file = tmp_path / "test.jsonl"
+        samples: list[SampleWithReflection] = [
+            {
+                "problem_id": "r1",
+                "problem": "test",
+                "generated": "Wait, test.",
+                "reference_answer": "answer",
+                "reflection_tokens": [],
+                "reflection_count": 1,
+                "reflection_density": 0.1,
+            },
+            {
+                "problem_id": "n1",
+                "problem": "test",
+                "generated": "Simple.",
+                "reference_answer": "answer",
+                "reflection_tokens": [],
+                "reflection_count": 0,
+                "reflection_density": 0.0,
+            },
+        ]
+        with open(input_file, "w") as f:
+            for sample in samples:
+                f.write(json.dumps(sample) + "\n")
+
+        config = ExtractVectorsConfig(
+            input_path=str(input_file),
+            model_name="test-model",
+            layer_indices=(0,),
+            output_path=str(tmp_path / "output.pt"),
+            min_samples=1,
+            batch_size=1,
+        )
+
+        mock_model = self._create_mock_model(hidden_dim=32, seq_len=3, num_layers=5)
+        mock_tokenizer = self._create_mock_tokenizer(seq_len=3)
+
+        with (
+            patch("probing_reflection.steering_vectors.AutoModelForCausalLM") as mock_model_cls,
+            patch("probing_reflection.steering_vectors.AutoTokenizer") as mock_tokenizer_cls,
+        ):
+            mock_model_cls.from_pretrained.return_value = mock_model
+            mock_tokenizer_cls.from_pretrained.return_value = mock_tokenizer
+
+            result = extract_steering_vectors(config)
+
+        assert result["metadata"]["r_count"] == 1
+        assert result["metadata"]["n_count"] == 1
+        assert "model_name" in result["metadata"]
+        assert "timestamp" in result["metadata"]

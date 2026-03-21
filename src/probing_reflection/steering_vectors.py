@@ -12,6 +12,7 @@ The extraction pipeline involves:
 5. Saving vectors for later injection
 """
 
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -19,10 +20,19 @@ from pathlib import Path
 import torch
 from torch import Tensor
 from tqdm import tqdm
-from transformers import PreTrainedModel, PreTrainedTokenizerBase
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+)
 
 from probing_reflection.reflection_diagnosis import REFLECTION_TAXONOMY
-from probing_reflection.types import SampleWithReflection
+from probing_reflection.types import (
+    ExtractVectorsConfig,
+    SampleWithReflection,
+    SteeringVectorResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -315,3 +325,58 @@ def extract_batch_activations(
                     logger.warning(f"CUDA OOM for N sample {sample['problem_id']}, skipping")
 
     return r_activations, n_activations
+
+
+def extract_steering_vectors(config: ExtractVectorsConfig) -> SteeringVectorResult:
+    """Main pipeline to extract steering vectors from model activations.
+
+    Orchestrates: load data → classify → load model → extract activations →
+    compute vectors → save results.
+
+    Args:
+        config: Configuration with input_path, model_name, layer_indices, etc.
+
+    Returns:
+        SteeringVectorResult with vectors and metadata
+    """
+    samples: list[SampleWithReflection] = []
+    with open(config.input_path) as f:
+        for line in f:
+            samples.append(json.loads(line))
+
+    logger.info(f"Loaded {len(samples)} samples from {config.input_path}")
+
+    r_samples, n_samples = classify_samples(samples, config.min_samples)
+    logger.info(f"Classified: {len(r_samples)} R samples, {len(n_samples)} N samples")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
+
+    logger.info(f"Loading model {config.model_name} on {device} with dtype {dtype}")
+    tokenizer = AutoTokenizer.from_pretrained(config.model_name)
+    model = AutoModelForCausalLM.from_pretrained(config.model_name, torch_dtype=dtype)
+    model.eval()  # type: ignore[no-untyped-call]
+    model = model.to(device)  # type: ignore[arg-type]
+
+    r_activations, n_activations = extract_batch_activations(
+        r_samples + n_samples,
+        model,
+        tokenizer,
+        config.layer_indices,
+        config.batch_size,
+    )
+
+    vectors = compute_difference_in_means(r_activations, n_activations, config.layer_indices)
+
+    metadata: dict[str, str | int | tuple[int, ...]] = {
+        "model_name": config.model_name,
+        "layer_indices": config.layer_indices,
+        "r_count": len(r_samples),
+        "n_count": len(n_samples),
+        "timestamp": datetime.now().isoformat(),
+    }
+
+    save_steering_vectors(vectors, metadata, config.output_path)
+    logger.info(f"Saved steering vectors to {config.output_path}")
+
+    return SteeringVectorResult(vectors=vectors, metadata=metadata)
