@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import NotRequired, TypedDict
 
+from torch import Tensor
+
 
 @dataclass(frozen=True)
 class ProbingConfig:
@@ -181,6 +183,27 @@ class ReflectionDiagnosisConfig:
     max_retries: int = 3
 
 
+@dataclass(frozen=True)
+class ExtractVectorsConfig:
+    """Immutable configuration for steering vector extraction.
+
+    Attributes:
+        input_path: Path to the input data file.
+        model_name: Name or path of the model for extraction.
+        layer_indices: Tuple of layer indices to extract vectors from.
+        output_path: Path to save the extracted steering vectors.
+        min_samples: Minimum number of samples required for extraction.
+        batch_size: Batch size for processing during extraction.
+    """
+
+    input_path: str = ""
+    model_name: str = "Qwen/Qwen2.5-0.5B"
+    layer_indices: tuple[int, ...] = ()
+    output_path: str = "steering_vectors.pt"
+    min_samples: int = 10
+    batch_size: int = 4
+
+
 class ReflectionToken(TypedDict):
     """Structured representation of a reflection token in model output.
 
@@ -256,3 +279,15 @@ class ReflectionAnalysisReport(TypedDict):
     per_subject_stats: dict[str, dict[str, float | int]]
     per_level_stats: dict[str, dict[str, float | int]]
     processing_errors: int
+
+
+class SteeringVectorResult(TypedDict):
+    """Result of steering vector extraction.
+
+    Attributes:
+        vectors: Mapping of layer index to steering vector tensor.
+        metadata: Metadata about the extraction (model name, sample counts, etc.).
+    """
+
+    vectors: dict[int, Tensor]
+    metadata: dict[str, str | int | tuple[int, ...]]
