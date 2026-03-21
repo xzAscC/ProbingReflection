@@ -160,3 +160,99 @@ class EvaluationConfig:
     batch_size: int = 8
     confidence_threshold: float = 0.7
     output_file: str | None = None
+
+
+@dataclass(frozen=True)
+class ReflectionDiagnosisConfig:
+    """Immutable configuration for reflection diagnosis experiments.
+
+    Attributes:
+        input_path: Path to the input JSONL file containing samples.
+        output_dir: Directory to save diagnosis results.
+        model_name: Name or path of the model for token analysis.
+        batch_size: Batch size for processing samples.
+        max_retries: Maximum number of retries for failed API calls.
+    """
+
+    input_path: str = ""
+    output_dir: str = "outputs/reflection_diagnosis/"
+    model_name: str = "Qwen/Qwen3.5-27B"
+    batch_size: int = 1
+    max_retries: int = 3
+
+
+class ReflectionToken(TypedDict):
+    """Structured representation of a reflection token in model output.
+
+    Represents a single instance of self-reflection language detected
+    in the model's generated text.
+
+    Attributes:
+        text: The actual token text (e.g., "Wait", "Actually").
+        category: Category of reflection (e.g., "correction", "verification").
+        context: Surrounding context where the token appeared.
+        confidence: Confidence score in [0.0, 1.0] for the detection.
+    """
+
+    text: str
+    category: str
+    context: str
+    confidence: float
+
+
+class SampleWithReflection(TypedDict):
+    """Sample data augmented with reflection analysis results.
+
+    Extends the base sample structure with reflection-specific metrics
+    and detected tokens.
+
+    Attributes:
+        problem_id: Unique identifier for the problem.
+        problem: The problem text or question.
+        generated: The model's generated response.
+        reference_answer: The ground truth reference answer.
+        subject: Optional subject category (e.g., "algebra", "geometry").
+        level: Optional difficulty level of the problem.
+        reflection_tokens: List of detected reflection tokens.
+        reflection_count: Total count of reflection tokens found.
+        reflection_density: Ratio of reflection tokens to total tokens.
+    """
+
+    problem_id: str
+    problem: str
+    generated: str
+    reference_answer: str
+    subject: NotRequired[str | None]
+    level: NotRequired[int | None]
+    reflection_tokens: list[ReflectionToken]
+    reflection_count: int
+    reflection_density: float
+
+
+class ReflectionAnalysisReport(TypedDict):
+    """Aggregated report of reflection analysis across all samples.
+
+    Provides comprehensive statistics on reflection patterns detected
+    in a dataset of model outputs.
+
+    Attributes:
+        total_samples: Total number of samples analyzed.
+        total_tokens: Total reflection tokens detected across all samples.
+        avg_tokens_per_sample: Average reflection tokens per sample.
+        overall_density: Average reflection density across all samples.
+        token_frequency: Frequency count of each unique token text.
+        category_distribution: Distribution of tokens by category.
+        per_subject_stats: Reflection statistics broken down by subject.
+        per_level_stats: Reflection statistics broken down by difficulty level.
+        processing_errors: Number of samples that failed processing.
+    """
+
+    total_samples: int
+    total_tokens: int
+    avg_tokens_per_sample: float
+    overall_density: float
+    token_frequency: dict[str, int]
+    category_distribution: dict[str, int]
+    per_subject_stats: dict[str, dict[str, float | int]]
+    per_level_stats: dict[str, dict[str, float | int]]
+    processing_errors: int

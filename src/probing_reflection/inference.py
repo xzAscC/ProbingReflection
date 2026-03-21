@@ -12,7 +12,7 @@ from typing import cast
 
 import torch
 from datasets import load_dataset  # type: ignore[import-untyped]
-from tqdm import tqdm  # type: ignore[import-untyped]
+from tqdm import tqdm
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,

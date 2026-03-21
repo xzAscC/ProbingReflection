@@ -18,6 +18,7 @@ dev = [
     "torch>=2.0.0",
     "datasets>=2.14.0",
     "tqdm>=4.65.0",
+    "types-tqdm>=4.65.0",
 ]
 
 [tool.ruff]

@@ -8,7 +8,12 @@ from pathlib import Path
 from probing_reflection import InferenceConfig
 from probing_reflection.evaluation import evaluate
 from probing_reflection.inference import run_inference
-from probing_reflection.types import EvaluationConfig, EvaluationReport
+from probing_reflection.reflection_diagnosis import (
+    diagnose_all,
+    write_analysis_report,
+    write_analyzed_jsonl,
+)
+from probing_reflection.types import EvaluationConfig, EvaluationReport, ReflectionDiagnosisConfig
 
 
 def format_report(report: EvaluationReport) -> str:
@@ -94,6 +99,29 @@ def create_parser() -> argparse.ArgumentParser:
         help="Minimum confidence to accept verdict (default: 0.7)",
     )
 
+    diagnose_parser = subparsers.add_parser(
+        "reflection-diagnose",
+        help="Diagnose reflection tokens in model outputs",
+    )
+    diagnose_parser.add_argument(
+        "--input",
+        "-i",
+        required=True,
+        help="Path to input JSONL file containing model outputs",
+    )
+    diagnose_parser.add_argument(
+        "--output-dir",
+        "-o",
+        default="outputs/reflection_analysis/",
+        help="Output directory for analysis results (default: outputs/reflection_analysis/)",
+    )
+    diagnose_parser.add_argument(
+        "--model",
+        "-m",
+        default="Qwen/Qwen3.5-27B",
+        help="Judge model name (default: Qwen/Qwen3.5-27B)",
+    )
+
     return parser
 
 
@@ -134,17 +162,54 @@ def handle_inference(args: argparse.Namespace) -> None:
     print(f"Results saved to {config.output_path}")
 
 
+def handle_reflection_diagnose(args: argparse.Namespace) -> None:
+    """Run reflection diagnosis with parsed arguments.
+
+    Args:
+        args: Parsed command line arguments.
+    """
+    config = ReflectionDiagnosisConfig(
+        input_path=args.input,
+        output_dir=args.output_dir,
+        model_name=args.model,
+    )
+
+    print(f"Diagnosing reflection tokens in {args.input} with model {args.model}...")
+    samples, report = diagnose_all(config)
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    jsonl_path = output_dir / "analyzed_samples.jsonl"
+    report_path = output_dir / "analysis_report.json"
+
+    write_analyzed_jsonl(samples, jsonl_path)
+    write_analysis_report(report, report_path)
+
+    print("\n=== Reflection Diagnosis Report ===")
+    print(f"Total samples: {report['total_samples']}")
+    print(f"Total reflection tokens: {report['total_tokens']}")
+    print(f"Average tokens per sample: {report['avg_tokens_per_sample']:.2f}")
+    print(f"Overall reflection density: {report['overall_density']:.2f} tokens per 100 words")
+    print(f"Processing errors: {report['processing_errors']}")
+    print(f"\nAnalyzed samples saved to {jsonl_path}")
+    print(f"Report saved to {report_path}")
+
+
 def main() -> None:
     """Parse arguments and dispatch to appropriate subcommand."""
     parser = create_parser()
 
-    if len(sys.argv) == 1 or (len(sys.argv) > 1 and sys.argv[1] not in ("inference", "evaluate")):
+    valid_commands = ("inference", "evaluate", "reflection-diagnose")
+    if len(sys.argv) == 1 or (len(sys.argv) > 1 and sys.argv[1] not in valid_commands):
         sys.argv.insert(1, "inference")
 
     args = parser.parse_args()
 
     if args.command == "evaluate":
         handle_evaluate(args)
+    elif args.command == "reflection-diagnose":
+        handle_reflection_diagnose(args)
     else:
         handle_inference(args)
 
