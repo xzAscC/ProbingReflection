@@ -19,6 +19,7 @@ from probing_reflection.steering_vectors import (
     classify_samples,
     compute_difference_in_means,
     extract_activation_at_position,
+    extract_batch_activations,
     find_reflection_token_position,
     save_steering_vectors,
 )
@@ -212,19 +213,205 @@ class TestBatch:
 
     def test_batch_activations_basic(self) -> None:
         """extract_batch_activations should process multiple samples."""
-        pytest.skip("extract_batch_activations not yet implemented")
+        samples: list[SampleWithReflection] = [
+            {
+                "problem_id": "r1",
+                "problem": "test",
+                "generated": "Wait, this is a test.",
+                "reference_answer": "answer",
+                "reflection_tokens": [],
+                "reflection_count": 1,
+                "reflection_density": 0.1,
+            },
+            {
+                "problem_id": "n1",
+                "problem": "test",
+                "generated": "This is simple.",
+                "reference_answer": "answer",
+                "reflection_tokens": [],
+                "reflection_count": 0,
+                "reflection_density": 0.0,
+            },
+        ]
+
+        model = MagicMock()
+        model.device = torch.device("cpu")
+        tokenizer = MagicMock()
+
+        tokenizer.encode.return_value = [1, 2, 3, 4]
+        tokenizer.convert_ids_to_tokens.return_value = ["Wait", "this", "is", "test"]
+        tokenizer.return_value = {"input_ids": Tensor([[1, 2, 3, 4]]).long()}
+        tokenizer.__call__ = lambda text, return_tensors=None: {
+            "input_ids": Tensor([[1, 2, 3, 4]]).long()
+        }
+
+        hidden_dim = 768
+        mock_hidden = torch.randn(1, 4, hidden_dim)
+        mock_output = MagicMock()
+        mock_output.hidden_states = (None,) + (mock_hidden,) * 12
+        model.return_value = mock_output
+        model.__call__ = lambda **kwargs: mock_output
+
+        r_acts, n_acts = extract_batch_activations(samples, model, tokenizer, (0, 5), batch_size=2)
+
+        assert 0 in r_acts
+        assert 5 in r_acts
+        assert 0 in n_acts
+        assert 5 in n_acts
+        assert len(r_acts[0]) == 1
+        assert len(n_acts[0]) == 1
 
     def test_batch_activations_shape(self) -> None:
         """extract_batch_activations should return stacked tensor of correct shape."""
-        pytest.skip("extract_batch_activations not yet implemented")
+        samples: list[SampleWithReflection] = [
+            {
+                "problem_id": "r1",
+                "problem": "test",
+                "generated": "Wait, test one.",
+                "reference_answer": "answer",
+                "reflection_tokens": [],
+                "reflection_count": 1,
+                "reflection_density": 0.1,
+            },
+            {
+                "problem_id": "r2",
+                "problem": "test",
+                "generated": "Actually, test two.",
+                "reference_answer": "answer",
+                "reflection_tokens": [],
+                "reflection_count": 1,
+                "reflection_density": 0.1,
+            },
+            {
+                "problem_id": "n1",
+                "problem": "test",
+                "generated": "Simple output.",
+                "reference_answer": "answer",
+                "reflection_tokens": [],
+                "reflection_count": 0,
+                "reflection_density": 0.0,
+            },
+        ]
+
+        model = MagicMock()
+        model.device = torch.device("cpu")
+        tokenizer = MagicMock()
+
+        tokenizer.encode.return_value = [1, 2, 3, 4]
+        tokenizer.convert_ids_to_tokens.return_value = ["Wait", "test", "one", "."]
+        tokenizer.return_value = {"input_ids": Tensor([[1, 2, 3, 4]]).long()}
+        tokenizer.__call__ = lambda text, return_tensors=None: {
+            "input_ids": Tensor([[1, 2, 3, 4]]).long()
+        }
+
+        hidden_dim = 256
+        mock_hidden = torch.randn(1, 4, hidden_dim)
+        mock_output = MagicMock()
+        mock_output.hidden_states = (None,) + (mock_hidden,) * 12
+        model.return_value = mock_output
+        model.__call__ = lambda **kwargs: mock_output
+
+        r_acts, n_acts = extract_batch_activations(samples, model, tokenizer, (3,), batch_size=2)
+
+        assert 3 in r_acts
+        assert len(r_acts[3]) == 2
+        assert r_acts[3][0].shape == (hidden_dim,)
+        assert r_acts[3][1].shape == (hidden_dim,)
+        assert len(n_acts[3]) == 1
 
     def test_batch_activations_empty_batch(self) -> None:
-        """extract_batch_activations should handle empty batch."""
-        pytest.skip("extract_batch_activations not yet implemented")
+        """extract_batch_activations should handle case where all samples are skipped."""
+        samples: list[SampleWithReflection] = [
+            {
+                "problem_id": "r1",
+                "problem": "test",
+                "generated": "No reflection tokens here.",
+                "reference_answer": "answer",
+                "reflection_tokens": [],
+                "reflection_count": 1,
+                "reflection_density": 0.1,
+            },
+            {
+                "problem_id": "n1",
+                "problem": "test",
+                "generated": "Simple output.",
+                "reference_answer": "answer",
+                "reflection_tokens": [],
+                "reflection_count": 0,
+                "reflection_density": 0.0,
+            },
+        ]
+
+        model = MagicMock()
+        model.device = torch.device("cpu")
+        tokenizer = MagicMock()
+
+        tokenizer.encode.return_value = [1, 2, 3, 4]
+        tokenizer.convert_ids_to_tokens.return_value = ["No", "tokens", "here", "."]
+        tokenizer.return_value = {"input_ids": Tensor([[1, 2, 3, 4]]).long()}
+        tokenizer.__call__ = lambda text, return_tensors=None: {
+            "input_ids": Tensor([[1, 2, 3, 4]]).long()
+        }
+
+        hidden_dim = 128
+        mock_hidden = torch.randn(1, 4, hidden_dim)
+        mock_output = MagicMock()
+        mock_output.hidden_states = (None,) + (mock_hidden,) * 12
+        model.return_value = mock_output
+        model.__call__ = lambda **kwargs: mock_output
+
+        r_acts, n_acts = extract_batch_activations(samples, model, tokenizer, (0,), batch_size=1)
+
+        assert 0 in r_acts
+        assert 0 in n_acts
+        assert len(r_acts[0]) == 0
+        assert len(n_acts[0]) == 1
 
     def test_batch_activations_progress_callback(self) -> None:
-        """extract_batch_activations should call progress callback if provided."""
-        pytest.skip("extract_batch_activations not yet implemented")
+        """extract_batch_activations should use tqdm progress bar."""
+        samples: list[SampleWithReflection] = [
+            {
+                "problem_id": "r1",
+                "problem": "test",
+                "generated": "Wait, test.",
+                "reference_answer": "answer",
+                "reflection_tokens": [],
+                "reflection_count": 1,
+                "reflection_density": 0.1,
+            },
+            {
+                "problem_id": "n1",
+                "problem": "test",
+                "generated": "Simple output.",
+                "reference_answer": "answer",
+                "reflection_tokens": [],
+                "reflection_count": 0,
+                "reflection_density": 0.0,
+            },
+        ]
+
+        model = MagicMock()
+        model.device = torch.device("cpu")
+        tokenizer = MagicMock()
+
+        tokenizer.encode.return_value = [1, 2, 3]
+        tokenizer.convert_ids_to_tokens.return_value = ["Wait", "test", "."]
+        tokenizer.return_value = {"input_ids": Tensor([[1, 2, 3]]).long()}
+        tokenizer.__call__ = lambda text, return_tensors=None: {
+            "input_ids": Tensor([[1, 2, 3]]).long()
+        }
+
+        hidden_dim = 64
+        mock_hidden = torch.randn(1, 3, hidden_dim)
+        mock_output = MagicMock()
+        mock_output.hidden_states = (None,) + (mock_hidden,) * 12
+        model.return_value = mock_output
+        model.__call__ = lambda **kwargs: mock_output
+
+        r_acts, n_acts = extract_batch_activations(samples, model, tokenizer, (0,), batch_size=1)
+
+        assert len(r_acts[0]) == 1
+        assert len(n_acts[0]) == 1
 
 
 class TestDiffMeans:
