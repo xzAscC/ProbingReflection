@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 
 @dataclass(frozen=True)
@@ -76,3 +76,87 @@ class ContrastivePair(TypedDict):
 
     positive: str
     negative: str
+
+
+class JudgeVerdict(TypedDict):
+    """Verdict from a judge model evaluating answer equivalence.
+
+    Represents the output of an LLM judge that determines whether
+    a model's extracted answer matches a reference answer.
+
+    Attributes:
+        explanation: Explanation of the judge's reasoning.
+        equivalent: Whether the extracted answer is equivalent to the reference.
+        confidence: Confidence score in [0.0, 1.0] for the verdict.
+    """
+
+    explanation: str
+    equivalent: bool
+    confidence: float
+
+
+class EvaluationResult(TypedDict):
+    """Result of evaluating a single sample against a reference.
+
+    Stores all information about the evaluation of one problem,
+    including the judge's verdict and metadata about the sample.
+
+    Attributes:
+        problem_id: Unique identifier for the problem.
+        extracted_answer: Answer extracted from the model output, or None if extraction failed.
+        reference_answer: The ground truth reference answer.
+        is_correct: Whether the extracted answer was judged correct.
+        judge_explanation: Explanation from the judge model.
+        confidence: Confidence score in [0.0, 1.0] for the evaluation.
+        subject: Optional subject category (e.g., "algebra", "geometry").
+        level: Optional difficulty level of the problem.
+    """
+
+    problem_id: str
+    extracted_answer: str | None
+    reference_answer: str
+    is_correct: bool
+    judge_explanation: str
+    confidence: float
+    subject: NotRequired[str | None]
+    level: NotRequired[int | None]
+
+
+class EvaluationReport(TypedDict):
+    """Aggregated report of evaluation results across all samples.
+
+    Provides summary statistics and detailed results for analysis
+    of model performance on an evaluation dataset.
+
+    Attributes:
+        overall_accuracy: Fraction of correct answers across all samples.
+        total_samples: Total number of samples evaluated.
+        correct_count: Number of correctly answered samples.
+        per_subject_accuracy: Accuracy broken down by subject category.
+        per_level_accuracy: Accuracy broken down by difficulty level.
+        results: List of individual evaluation results.
+    """
+
+    overall_accuracy: float
+    total_samples: int
+    correct_count: int
+    per_subject_accuracy: dict[str, float]
+    per_level_accuracy: dict[str, float]
+    results: list[EvaluationResult]
+
+
+@dataclass(frozen=True)
+class EvaluationConfig:
+    """Immutable configuration for evaluation experiments.
+
+    Attributes:
+        judge_model_name: Name or path of the judge model.
+        batch_size: Batch size for evaluation.
+        confidence_threshold: Minimum confidence to accept a verdict.
+        output_file: Optional path to save evaluation results.
+    """
+
+    judge_model_name: str = "Qwen/Qwen3.5-27B"
+    batch_size: int = 8
+    confidence_threshold: float = 0.7
+    output_file: str | None = None
