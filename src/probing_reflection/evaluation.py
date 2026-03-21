@@ -397,3 +397,61 @@ def evaluate(jsonl_path: str, config: EvaluationConfig) -> EvaluationReport:
             )
 
     return generate_report(results)
+
+
+def evaluate_gpqa(jsonl_path: str, config: EvaluationConfig | None = None) -> EvaluationReport:
+    """Evaluate GPQA outputs using LLM judge (full text comparison).
+
+    Unlike evaluate(), this does NOT use boxed extraction. It compares
+    the full model output against the reference answer text.
+
+    Args:
+        jsonl_path: Path to JSONL file with model outputs.
+        config: Evaluation configuration.
+
+    Returns:
+        EvaluationReport with accuracy metrics.
+    """
+    if config is None:
+        config = EvaluationConfig()
+
+    records: list[dict[str, object]] = []
+    with open(jsonl_path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
+
+    judge = LLMJudge(config.judge_model_name, config.batch_size, config.confidence_threshold)
+    judge.load_model()
+
+    results: list[EvaluationResult] = []
+    for record in records:
+        generated = str(record.get("generated", ""))
+        reference = str(record.get("reference_answer", ""))
+
+        if not generated.strip():
+            results.append(
+                EvaluationResult(
+                    problem_id=str(record.get("problem_id", "")),
+                    extracted_answer=None,
+                    reference_answer=reference,
+                    is_correct=False,
+                    judge_explanation="No output generated",
+                    confidence=0.0,
+                )
+            )
+        else:
+            verdict = judge.judge_single(reference, generated)
+            results.append(
+                EvaluationResult(
+                    problem_id=str(record.get("problem_id", "")),
+                    extracted_answer=generated,
+                    reference_answer=reference,
+                    is_correct=verdict["equivalent"],
+                    judge_explanation=verdict["explanation"],
+                    confidence=verdict["confidence"],
+                )
+            )
+
+    return generate_report(results)

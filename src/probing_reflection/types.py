@@ -204,6 +204,36 @@ class ExtractVectorsConfig:
     batch_size: int = 4
 
 
+@dataclass(frozen=True)
+class SteeringInferenceConfig:
+    """Immutable configuration for steering inference experiments.
+
+    Attributes:
+        model_name: Name or path of the model for steering inference.
+        steering_vector_path: Path to the saved steering vectors file.
+        layer_indices: Tuple of layer indices to apply steering to.
+            Empty tuple means all layers.
+        coefficient: Steering strength multiplier.
+        dataset_name: Name of the dataset to run inference on.
+        dataset_config: Optional config name for datasets like GPQA.
+        batch_size: Batch size for inference (1 for 4-bit memory constraints).
+        max_new_tokens: Maximum number of new tokens to generate.
+        output_path: Path to save inference results.
+        limit: Optional limit on number of samples to process.
+    """
+
+    model_name: str = "Qwen/Qwen2.5-32B"
+    steering_vector_path: str = ""
+    layer_indices: tuple[int, ...] = ()
+    coefficient: float = 1.0
+    dataset_name: str = "HuggingFaceH4/MATH-500"
+    dataset_config: str | None = None
+    batch_size: int = 1
+    max_new_tokens: int = 512
+    output_path: str = ""
+    limit: int | None = None
+
+
 class ReflectionToken(TypedDict):
     """Structured representation of a reflection token in model output.
 
