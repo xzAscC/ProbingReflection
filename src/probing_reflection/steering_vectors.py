@@ -229,12 +229,15 @@ def extract_batch_activations(
     For R set: extracts at reflection token position
     For N set: extracts at last token position
 
+    Processes samples in chunks of batch_size. On CUDA OOM, falls back to
+    single-sample processing with retry.
+
     Args:
         samples: Samples with reflection analysis
         model: Language model
         tokenizer: Tokenizer for the model
         layer_indices: Layers to extract activations from
-        batch_size: Number of samples to process at once
+        batch_size: Number of samples to process in each chunk
 
     Returns:
         Tuple of (R_activations_by_layer, N_activations_by_layer)
@@ -245,38 +248,70 @@ def extract_batch_activations(
     r_activations: dict[int, list[Tensor]] = {layer: [] for layer in layer_indices}
     n_activations: dict[int, list[Tensor]] = {layer: [] for layer in layer_indices}
 
-    for sample in tqdm(r_samples, desc="Extracting R activations"):
-        text = sample["generated"]
-        position = find_reflection_token_position(tokenizer, text)
-        if position is None:
-            logger.warning(f"Reflection token not found for sample {sample['problem_id']}")
-            continue
+    for batch_start in tqdm(range(0, len(r_samples), batch_size), desc="Extracting R activations"):
+        batch_end = min(batch_start + batch_size, len(r_samples))
+        batch = r_samples[batch_start:batch_end]
 
         try:
-            activations = extract_activation_at_position(
-                model, tokenizer, text, position, layer_indices
-            )
-            for layer, tensor in activations.items():
-                r_activations[layer].append(tensor.cpu())
+            for sample in batch:
+                text = sample["generated"]
+                position = find_reflection_token_position(tokenizer, text)
+                if position is None:
+                    logger.warning(f"Reflection token not found for sample {sample['problem_id']}")
+                    continue
+
+                activations = extract_activation_at_position(
+                    model, tokenizer, text, position, layer_indices
+                )
+                for layer, tensor in activations.items():
+                    r_activations[layer].append(tensor.cpu())
         except torch.cuda.OutOfMemoryError:
             torch.cuda.empty_cache()
-            logger.warning(f"CUDA OOM for R sample {sample['problem_id']}, skipping")
-            continue
+            for sample in batch:
+                text = sample["generated"]
+                position = find_reflection_token_position(tokenizer, text)
+                if position is None:
+                    logger.warning(f"Reflection token not found for sample {sample['problem_id']}")
+                    continue
+                try:
+                    activations = extract_activation_at_position(
+                        model, tokenizer, text, position, layer_indices
+                    )
+                    for layer, tensor in activations.items():
+                        r_activations[layer].append(tensor.cpu())
+                except torch.cuda.OutOfMemoryError:
+                    torch.cuda.empty_cache()
+                    logger.warning(f"CUDA OOM for R sample {sample['problem_id']}, skipping")
 
-    for sample in tqdm(n_samples, desc="Extracting N activations"):
-        text = sample["generated"]
-        tokens = tokenizer.encode(text, add_special_tokens=False)
-        position = len(tokens) - 1
+    for batch_start in tqdm(range(0, len(n_samples), batch_size), desc="Extracting N activations"):
+        batch_end = min(batch_start + batch_size, len(n_samples))
+        batch = n_samples[batch_start:batch_end]
 
         try:
-            activations = extract_activation_at_position(
-                model, tokenizer, text, position, layer_indices
-            )
-            for layer, tensor in activations.items():
-                n_activations[layer].append(tensor.cpu())
+            for sample in batch:
+                text = sample["generated"]
+                tokens = tokenizer.encode(text, add_special_tokens=False)
+                position = len(tokens) - 1
+
+                activations = extract_activation_at_position(
+                    model, tokenizer, text, position, layer_indices
+                )
+                for layer, tensor in activations.items():
+                    n_activations[layer].append(tensor.cpu())
         except torch.cuda.OutOfMemoryError:
             torch.cuda.empty_cache()
-            logger.warning(f"CUDA OOM for N sample {sample['problem_id']}, skipping")
-            continue
+            for sample in batch:
+                text = sample["generated"]
+                tokens = tokenizer.encode(text, add_special_tokens=False)
+                position = len(tokens) - 1
+                try:
+                    activations = extract_activation_at_position(
+                        model, tokenizer, text, position, layer_indices
+                    )
+                    for layer, tensor in activations.items():
+                        n_activations[layer].append(tensor.cpu())
+                except torch.cuda.OutOfMemoryError:
+                    torch.cuda.empty_cache()
+                    logger.warning(f"CUDA OOM for N sample {sample['problem_id']}, skipping")
 
     return r_activations, n_activations
