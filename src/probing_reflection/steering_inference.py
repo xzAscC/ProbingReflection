@@ -149,10 +149,16 @@ def create_steering_hook(
     ) -> Tensor | tuple[Tensor, ...]:
         if isinstance(output, tuple):
             hidden_states = output[0]
-            hidden_states = hidden_states + coefficient * vector.to(hidden_states.device)
+            # Cast vector to match hidden_states dtype and device
+            steering = coefficient * vector.to(
+                dtype=hidden_states.dtype, device=hidden_states.device
+            )
+            hidden_states = hidden_states + steering
             return (hidden_states,) + output[1:]
         else:
-            output = output + coefficient * vector.to(output.device)
+            # Cast vector to match output dtype and device
+            steering = coefficient * vector.to(dtype=output.dtype, device=output.device)
+            output = output + steering
             return output
 
     return hook
@@ -241,7 +247,10 @@ def run_steering_inference(config: SteeringInferenceConfig) -> Path:
     if config.dataset_config:
         dataset = load_dataset(config.dataset_name, config.dataset_config, split="train")
     else:
-        dataset = load_dataset(config.dataset_name, split="test")
+        try:
+            dataset = load_dataset(config.dataset_name, split="test")
+        except ValueError:
+            dataset = load_dataset(config.dataset_name, split="train")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_samples = len(dataset)

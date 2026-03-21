@@ -8,6 +8,9 @@ version = "0.1.0"
 requires-python = ">=3.12"
 description = "ProbingReflection - Probing and Modulating Self-Reflection in Language Models"
 
+[project.scripts]
+probing-reflection = "probing_reflection.__main__:main"
+
 [dependency-groups]
 dev = [
     "ruff>=0.8.0",
@@ -19,6 +22,8 @@ dev = [
     "datasets>=2.14.0",
     "tqdm>=4.65.0",
     "types-tqdm>=4.65.0",
+    "accelerate>=0.26.0",
+    "bitsandbytes>=0.43.0",
 ]
 
 [tool.ruff]
