@@ -15,10 +15,13 @@ The pipeline involves:
 
 from __future__ import annotations
 
+import json
 import logging
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+import torch
 from numpy import ndarray
 from sklearn.decomposition import PCA  # type: ignore[import-untyped]
 from sklearn.linear_model import LogisticRegression  # type: ignore[import-untyped]
@@ -26,14 +29,24 @@ from sklearn.manifold import TSNE  # type: ignore[import-untyped]
 from sklearn.model_selection import train_test_split  # type: ignore[import-untyped]
 from torch import Tensor
 from tqdm import tqdm
-from transformers import PreTrainedModel, PreTrainedTokenizerBase
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+)
 
 from probing_reflection.reflection_diagnosis import REFLECTION_TAXONOMY
 from probing_reflection.steering_vectors import (
     extract_activation_at_position,
     find_reflection_token_position,
 )
-from probing_reflection.types import ProbeMetrics, SampleWithReflection
+from probing_reflection.types import (
+    LinearProbeConfig,
+    LinearProbeResult,
+    ProbeMetrics,
+    SampleWithReflection,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -373,3 +386,83 @@ def save_probe_weights(
             save_arrays[f"metadata_{key}"] = np.array([value], dtype=object)
 
     np.savez(path, **save_arrays)  # type: ignore[arg-type]
+
+
+def run_linear_probe(config: LinearProbeConfig) -> LinearProbeResult:
+    """Run the full linear probe pipeline.
+
+    Pipeline:
+    1. Load samples from input_path
+    2. Load model and tokenizer
+    3. Collect token activations (R and N sets)
+    4. Train linear probes per layer
+    5. Evaluate probes
+    6. Generate visualizations (t-SNE, PCA)
+    7. Save probe weights
+
+    Args:
+        config: LinearProbeConfig with all pipeline parameters.
+
+    Returns:
+        LinearProbeResult with coefficients, metrics, and metadata.
+    """
+    samples: list[SampleWithReflection] = []
+    with open(config.input_path) as f:
+        for line in f:
+            samples.append(json.loads(line))
+
+    logger.info(f"Loaded {len(samples)} samples from {config.input_path}")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
+
+    logger.info(f"Loading model {config.model_name} on {device} with dtype {dtype}")
+    tokenizer = AutoTokenizer.from_pretrained(config.model_name)
+    model = AutoModelForCausalLM.from_pretrained(config.model_name, torch_dtype=dtype)
+    model.eval()  # type: ignore[no-untyped-call]
+    model = model.to(device)  # type: ignore[arg-type]
+
+    r_activations, n_activations = collect_token_activations(
+        samples, model, tokenizer, config.layer_indices
+    )
+    logger.info(f"Collected activations from {len(r_activations.get(0, []))} R samples")
+
+    probes, metrics = train_linear_probe(
+        r_activations, n_activations, config.layer_indices, config.test_size
+    )
+    logger.info(f"Trained probes for {len(probes)} layers")
+
+    output_dir = Path(config.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if r_activations and n_activations:
+        first_layer = config.layer_indices[0] if config.layer_indices else 0
+        generate_tsne_plot(r_activations, n_activations, output_dir / "tsne_plot.png", first_layer)
+        generate_pca_plot(r_activations, n_activations, output_dir / "pca_plot.png", first_layer)
+        logger.info("Generated visualizations")
+
+    metadata: dict[str, str | int | tuple[int, ...]] = {
+        "model_name": config.model_name,
+        "layer_indices": config.layer_indices,
+        "test_size": str(config.test_size),
+        "r_count": len(
+            r_activations.get(config.layer_indices[0] if config.layer_indices else 0, [])
+        ),
+        "n_count": len(
+            n_activations.get(config.layer_indices[0] if config.layer_indices else 0, [])
+        ),
+        "timestamp": datetime.now().isoformat(),
+    }
+
+    save_probe_weights(probes, metrics, output_dir / "probe_weights.npz", metadata)
+    logger.info(f"Saved probe weights to {output_dir / 'probe_weights.npz'}")
+
+    coefficients: dict[int, list[float]] = {
+        layer: probe.coef_.flatten().tolist() for layer, probe in probes.items()
+    }
+
+    return LinearProbeResult(
+        coefficients=coefficients,
+        metrics=metrics,
+        metadata=metadata,
+    )
