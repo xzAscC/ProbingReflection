@@ -321,3 +321,52 @@ class SteeringVectorResult(TypedDict):
 
     vectors: dict[int, Tensor]
     metadata: dict[str, str | int | tuple[int, ...]]
+
+
+@dataclass(frozen=True)
+class LinearProbeConfig:
+    """Immutable configuration for linear probe experiments.
+
+    Attributes:
+        input_path: Path to the input data file.
+        model_name: Name or path of the model for probing.
+        layer_indices: Tuple of layer indices to probe.
+        test_size: Fraction of data to use for testing.
+        output_dir: Directory to save probe results.
+    """
+
+    input_path: str = ""
+    model_name: str = ""
+    layer_indices: tuple[int, ...] = ()
+    test_size: float = 0.2
+    output_dir: str = "outputs/linear_probe/"
+
+
+class ProbeMetrics(TypedDict):
+    """Metrics for a single probe layer.
+
+    Attributes:
+        layer_index: Index of the layer that was probed.
+        accuracy: Classification accuracy on the test set.
+        train_samples: Number of training samples used.
+        test_samples: Number of test samples used.
+    """
+
+    layer_index: int
+    accuracy: float
+    train_samples: int
+    test_samples: int
+
+
+class LinearProbeResult(TypedDict):
+    """Result of linear probe training and evaluation.
+
+    Attributes:
+        coefficients: Mapping of layer index to probe coefficients.
+        metrics: List of metrics for each probed layer.
+        metadata: Metadata about the probing experiment.
+    """
+
+    coefficients: dict[int, list[float]]
+    metrics: list[ProbeMetrics]
+    metadata: dict[str, str | int | tuple[int, ...]]
