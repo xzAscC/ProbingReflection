@@ -9,15 +9,16 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import cast
 
 import torch
-from datasets import load_dataset  # type: ignore[import-untyped]
+from datasets.load import load_dataset
 from torch import Tensor
+from torch.utils.hooks import RemovableHandle
 from tqdm import tqdm
 
-from probing_reflection.batch_utils import get_item_field, prepare_batch
-from probing_reflection.model_utils import load_model_4bit
+from probing_reflection.batch_utils import decode_generated_tokens, get_item_field, prepare_batch
+from probing_reflection.model_utils import GenerativeModel, load_model_4bit
 from probing_reflection.prompts import format_cot_prompt
 from probing_reflection.types import SteeringInferenceConfig
 
@@ -124,6 +125,7 @@ def run_steering_inference(config: SteeringInferenceConfig) -> Path:
     """
     vectors = load_steering_vectors(config.steering_vector_path)
     model, tokenizer = load_model_4bit(config.model_name)
+    generative_model = cast(GenerativeModel, model)
     num_layers = len(model.model.layers)
 
     if config.layer_indices:
@@ -149,7 +151,7 @@ def run_steering_inference(config: SteeringInferenceConfig) -> Path:
     num_samples = len(dataset)
     if config.limit is not None and config.limit < num_samples:
         num_samples = config.limit
-    handles: list[Any] = []
+    handles: list[RemovableHandle] = []
 
     try:
         for layer_idx in layer_indices:
@@ -174,7 +176,7 @@ def run_steering_inference(config: SteeringInferenceConfig) -> Path:
 
                 try:
                     with torch.no_grad():
-                        outputs = model.generate(  # type: ignore[operator]
+                        outputs = generative_model.generate(
                             input_ids=input_ids,
                             attention_mask=attention_mask,
                             max_new_tokens=config.max_new_tokens,
@@ -191,7 +193,7 @@ def run_steering_inference(config: SteeringInferenceConfig) -> Path:
                         single_mask = single_input["attention_mask"].to(device)
 
                         with torch.no_grad():
-                            output = model.generate(  # type: ignore[operator]
+                            output = generative_model.generate(
                                 input_ids=single_ids,
                                 attention_mask=single_mask,
                                 max_new_tokens=config.max_new_tokens,
@@ -199,8 +201,9 @@ def run_steering_inference(config: SteeringInferenceConfig) -> Path:
                                 do_sample=False,
                             )
 
-                        generated_text = tokenizer.decode(output[0], skip_special_tokens=True)
-                        generated_text = str(generated_text)[len(prompt) :].strip()
+                        generated_text = decode_generated_tokens(
+                            tokenizer, output[0], single_ids.shape[-1]
+                        )
 
                         result_entry = {
                             "problem_id": get_item_field(item, ["unique_id", "id", "problem_id"]),
@@ -217,9 +220,8 @@ def run_steering_inference(config: SteeringInferenceConfig) -> Path:
                     continue
 
                 for j, (output, item) in enumerate(zip(outputs, batch_items)):  # noqa: B905
-                    generated_text = tokenizer.decode(output, skip_special_tokens=True)
                     prompt = prompts[j]
-                    generated_text = str(generated_text)[len(prompt) :].strip()
+                    generated_text = decode_generated_tokens(tokenizer, output, input_ids.shape[-1])
 
                     problem = problems[j]
                     result_entry = {
