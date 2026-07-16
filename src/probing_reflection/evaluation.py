@@ -128,6 +128,18 @@ def evaluate(jsonl_path: str, config: EvaluationConfig) -> EvaluationReport:
     pairs_to_judge: list[tuple[dict[str, object], str]] = []
     results: list[EvaluationResult] = []
 
+    def optional_subject(record: dict[str, object]) -> str | None:
+        value = record.get("subject")
+        return str(value) if value is not None else None
+
+    def optional_level(record: dict[str, object]) -> int | None:
+        value = record.get("level")
+        if value is None:
+            return None
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        return int(str(value))
+
     for record in records:
         generated = str(record.get("generated", ""))
         extracted = extract_boxed_answer(generated)
@@ -140,15 +152,18 @@ def evaluate(jsonl_path: str, config: EvaluationConfig) -> EvaluationReport:
                     is_correct=False,
                     judge_explanation="No boxed answer found",
                     confidence=0.0,
-                    subject=record.get("subject"),  # type: ignore[typeddict-item]
-                    level=record.get("level"),  # type: ignore[typeddict-item]
+                    subject=optional_subject(record),
+                    level=optional_level(record),
                 )
             )
         else:
             pairs_to_judge.append((record, extracted))
 
     if pairs_to_judge:
-        pairs = [(p[1], str(p[0].get("reference_answer", ""))) for p in pairs_to_judge]
+        pairs = [
+            (str(record.get("reference_answer", "")), extracted)
+            for record, extracted in pairs_to_judge
+        ]
         verdicts = judge.judge_batch(pairs)
 
         for (record, extracted), verdict in zip(pairs_to_judge, verdicts, strict=True):
@@ -160,8 +175,8 @@ def evaluate(jsonl_path: str, config: EvaluationConfig) -> EvaluationReport:
                     is_correct=verdict["equivalent"],
                     judge_explanation=verdict["explanation"],
                     confidence=verdict["confidence"],
-                    subject=record.get("subject"),  # type: ignore[typeddict-item]
-                    level=record.get("level"),  # type: ignore[typeddict-item]
+                    subject=optional_subject(record),
+                    level=optional_level(record),
                 )
             )
 
