@@ -27,13 +27,13 @@ THRESHOLD="${THRESHOLD:-0.7}"
 OUTPUT="${OUTPUT:-}"
 
 # Build command
-CMD="uv run probing-reflection evaluate $JSONL_PATH"
-CMD="$CMD --model $MODEL"
-CMD="$CMD --batch-size $BATCH_SIZE"
-CMD="$CMD --confidence-threshold $THRESHOLD"
+CMD=(uv run probing-reflection evaluate "$JSONL_PATH")
+CMD+=(--model "$MODEL")
+CMD+=(--batch-size "$BATCH_SIZE")
+CMD+=(--confidence-threshold "$THRESHOLD")
 
 if [ -n "$OUTPUT" ]; then
-    CMD="$CMD --output $OUTPUT"
+    CMD+=(--output "$OUTPUT")
 fi
 
 echo "=== Running Evaluation ==="
@@ -44,7 +44,7 @@ echo "Confidence Threshold: $THRESHOLD"
 echo ""
 
 # Run evaluation
-$CMD
+"${CMD[@]}"
 
 echo ""
 echo "Evaluation complete."

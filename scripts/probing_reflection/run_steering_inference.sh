@@ -59,43 +59,42 @@ if [ -n "$LIMIT" ]; then
 fi
 echo ""
 
-# Build Python command
-LAYER_ARG=""
-if [ -n "$LAYERS" ]; then
-    LAYER_ARG="layer_indices=tuple(int(x.strip()) for x in '$LAYERS'.split(',')),"
-fi
-
-LIMIT_ARG=""
-if [ -n "$LIMIT" ]; then
-    LIMIT_ARG="limit=$LIMIT,"
-fi
-
-CONFIG_ARG=""
-if [ -n "$DATASET_CONFIG" ]; then
-    CONFIG_ARG="dataset_config='$DATASET_CONFIG',"
-fi
-
-# Run steering inference using Python directly
-uv run python -c "
+# Run steering inference without interpolating values into Python source
+uv run python -c '
+import sys
 from probing_reflection.steering_inference import run_steering_inference
 from probing_reflection.types import SteeringInferenceConfig
 
+(
+    model_name,
+    vector_path,
+    layers,
+    coefficient,
+    dataset_name,
+    dataset_config,
+    batch_size,
+    max_tokens,
+    output_path,
+    limit,
+) = sys.argv[1:]
+
 config = SteeringInferenceConfig(
-    model_name='$MODEL',
-    steering_vector_path='$VECTOR_PATH',
-    $LAYER_ARG
-    coefficient=$COEFFICIENT,
-    dataset_name='$DATASET',
-    $CONFIG_ARG
-    batch_size=$BATCH_SIZE,
-    max_new_tokens=$MAX_TOKENS,
-    output_path='$OUTPUT',
-    $LIMIT_ARG
+    model_name=model_name,
+    steering_vector_path=vector_path,
+    layer_indices=tuple(int(value.strip()) for value in layers.split(",") if value.strip()),
+    coefficient=float(coefficient),
+    dataset_name=dataset_name,
+    dataset_config=dataset_config or None,
+    batch_size=int(batch_size),
+    max_new_tokens=int(max_tokens),
+    output_path=output_path,
+    limit=int(limit) if limit else None,
 )
 
 result = run_steering_inference(config)
-print(f'Steering inference complete. Results saved to: {result}')
-"
+print(f"Steering inference complete. Results saved to: {result}")
+' "$MODEL" "$VECTOR_PATH" "$LAYERS" "$COEFFICIENT" "$DATASET" "$DATASET_CONFIG" \
+  "$BATCH_SIZE" "$MAX_TOKENS" "$OUTPUT" "$LIMIT"
 
 echo ""
 echo "Steering inference complete."

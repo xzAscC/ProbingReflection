@@ -45,32 +45,37 @@ echo "Test Size: $TEST_SIZE"
 echo "Output Directory: $OUTPUT_DIR"
 echo ""
 
-# Convert layers to Python tuple format
-LAYER_TUPLE=$(echo "$LAYERS" | sed 's/\([^,]*\)/\1/g' | tr ',' ' ')
-
-# Run linear probe using Python directly
-uv run python -c "
-import json
+# Run linear probe without interpolating values into Python source
+uv run python -c '
+import sys
 from probing_reflection.linear_probe import run_linear_probe
 from probing_reflection.types import LinearProbeConfig
 
-layer_indices = tuple(int(x.strip()) for x in '$LAYERS'.split(','))
+input_path, model_name, layers, test_size, output_dir = sys.argv[1:]
+layer_indices = tuple(int(value.strip()) for value in layers.split(","))
 
 config = LinearProbeConfig(
-    input_path='$INPUT_PATH',
-    model_name='$MODEL',
+    input_path=input_path,
+    model_name=model_name,
     layer_indices=layer_indices,
-    test_size=$TEST_SIZE,
-    output_dir='$OUTPUT_DIR',
+    test_size=float(test_size),
+    output_dir=output_dir,
 )
 
 result = run_linear_probe(config)
 
-print('\\n=== Linear Probe Results ===')
-for metric in result['metrics']:
-    print(f\"Layer {metric['layer_index']}: Accuracy={metric['accuracy']:.2%} (train={metric['train_samples']}, test={metric['test_samples']})\")
-print(f\"\\nResults saved to: $OUTPUT_DIR\")
-"
+print("\n=== Linear Probe Results ===")
+for metric in result["metrics"]:
+    print(
+        "Layer {}: Accuracy={:.2%} (train={}, test={})".format(
+            metric["layer_index"],
+            metric["accuracy"],
+            metric["train_samples"],
+            metric["test_samples"],
+        )
+    )
+print(f"\nResults saved to: {output_dir}")
+' "$INPUT_PATH" "$MODEL" "$LAYERS" "$TEST_SIZE" "$OUTPUT_DIR"
 
 echo ""
 echo "Linear probe training complete."
