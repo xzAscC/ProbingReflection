@@ -1,0 +1,7 @@
+{"problem_id": "test_001", "problem": "What is 6 times 7?", "generated": "To solve this, I multiply 6 by 7. The answer is \\boxed{42}.", "reference_answer": "42", "subject": "Arithmetic", "level": 1}
+{"problem_id": "test_002", "problem": "What is 6 times 7?", "generated": "Let me calculate: 6 * 7 = 42. So the answer is \\boxed{24}.", "reference_answer": "42", "subject": "Arithmetic", "level": 1}
+{"problem_id": "test_003", "problem": "What is half of 1?", "generated": "Half of 1 is 0.5. So the answer is \\boxed{0.5}.", "reference_answer": "1/2", "subject": "Fractions", "level": 2}
+{"problem_id": "test_004", "problem": "What is 2 + 2?", "generated": "Adding 2 and 2 gives me 4. The answer is simply 4.", "reference_answer": "4"}
+{"problem_id": "test_005", "problem": "What is one half written as a fraction?", "generated": "One half is \\boxed{\\frac{1}{2}}.", "reference_answer": "1/2", "subject": "Fractions", "level": 2}
+{"problem_id": "test_006", "problem": "Solve for x: 2x = 8", "generated": "First I tried \\boxed{2} but that was wrong. Let me recalculate. 2x = 8 means x = 8/2 = 4, so \\boxed{4} is correct.", "reference_answer": "4"}
+{"problem_id": "test_007", "problem": "If x^2 - 5x + 6 = 0, what are the roots?", "generated": "This factors as (x-2)(x-3) = 0, so x = 2 or x = 3. The roots are \\boxed{2, 3}.", "reference_answer": "2, 3", "subject": "Algebra", "level": 2}

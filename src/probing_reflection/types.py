@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TypedDict
+from typing import NotRequired, TypedDict
+
+from torch import Tensor
 
 
 @dataclass(frozen=True)
@@ -24,6 +26,27 @@ class ProbingConfig:
 
     model_name: str = ""
     layer_indices: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class InferenceConfig:
+    """Immutable configuration for inference experiments.
+
+    Attributes:
+        model_name: Name or path of the model for inference.
+        dataset_name: Name of the dataset to run inference on.
+        batch_size: Batch size for inference.
+        max_new_tokens: Maximum number of new tokens to generate.
+        output_path: Path to save inference results.
+        limit: Optional maximum number of samples to process.
+    """
+
+    model_name: str = "Qwen/Qwen3.5-0.8B"
+    dataset_name: str = "HuggingFaceH4/MATH-500"
+    batch_size: int = 8
+    max_new_tokens: int = 256
+    output_path: str = "outputs/math500_inference/qwen3-0.8b-math500-cot.jsonl"
+    limit: int | None = None
 
 
 @dataclass(frozen=True)
@@ -57,3 +80,324 @@ class ContrastivePair(TypedDict):
 
     positive: str
     negative: str
+
+
+class JudgeVerdict(TypedDict):
+    """Verdict from a judge model evaluating answer equivalence.
+
+    Represents the output of an LLM judge that determines whether
+    a model's extracted answer matches a reference answer.
+
+    Attributes:
+        explanation: Explanation of the judge's reasoning.
+        equivalent: Whether the extracted answer is equivalent to the reference.
+        confidence: Confidence score in [0.0, 1.0] for the verdict.
+    """
+
+    explanation: str
+    equivalent: bool
+    confidence: float
+
+
+class EvaluationResult(TypedDict):
+    """Result of evaluating a single sample against a reference.
+
+    Stores all information about the evaluation of one problem,
+    including the judge's verdict and metadata about the sample.
+
+    Attributes:
+        problem_id: Unique identifier for the problem.
+        extracted_answer: Answer extracted from the model output, or None if extraction failed.
+        reference_answer: The ground truth reference answer.
+        is_correct: Whether the extracted answer was judged correct.
+        judge_explanation: Explanation from the judge model.
+        confidence: Confidence score in [0.0, 1.0] for the evaluation.
+        subject: Optional subject category (e.g., "algebra", "geometry").
+        level: Optional difficulty level of the problem.
+    """
+
+    problem_id: str
+    extracted_answer: str | None
+    reference_answer: str
+    is_correct: bool
+    judge_explanation: str
+    confidence: float
+    subject: NotRequired[str | None]
+    level: NotRequired[int | None]
+
+
+class EvaluationReport(TypedDict):
+    """Aggregated report of evaluation results across all samples.
+
+    Provides summary statistics and detailed results for analysis
+    of model performance on an evaluation dataset.
+
+    Attributes:
+        overall_accuracy: Fraction of correct answers across all samples.
+        total_samples: Total number of samples evaluated.
+        correct_count: Number of correctly answered samples.
+        per_subject_accuracy: Accuracy broken down by subject category.
+        per_level_accuracy: Accuracy broken down by difficulty level.
+        results: List of individual evaluation results.
+    """
+
+    overall_accuracy: float
+    total_samples: int
+    correct_count: int
+    per_subject_accuracy: dict[str, float]
+    per_level_accuracy: dict[str, float]
+    results: list[EvaluationResult]
+
+
+@dataclass(frozen=True)
+class EvaluationConfig:
+    """Immutable configuration for evaluation experiments.
+
+    Attributes:
+        judge_model_name: Name or path of the judge model.
+        batch_size: Batch size for evaluation.
+        confidence_threshold: Minimum confidence to accept a verdict.
+        output_file: Optional path to save evaluation results.
+    """
+
+    judge_model_name: str = "Qwen/Qwen3.5-27B"
+    batch_size: int = 8
+    confidence_threshold: float = 0.7
+    output_file: str | None = None
+
+
+@dataclass(frozen=True)
+class ReflectionDiagnosisConfig:
+    """Immutable configuration for reflection diagnosis experiments.
+
+    Attributes:
+        input_path: Path to the input JSONL file containing samples.
+        output_dir: Directory to save diagnosis results.
+        model_name: Name or path of the model for token analysis.
+        batch_size: Batch size for processing samples.
+        max_retries: Maximum number of retries for failed API calls.
+        judge_type: Type of judge to use - "reflection" or "roscoe".
+    """
+
+    input_path: str = ""
+    output_dir: str = "outputs/reflection_diagnosis/"
+    model_name: str = "Qwen/Qwen3.5-27B"
+    batch_size: int = 1
+    max_retries: int = 3
+    judge_type: str = "reflection"
+
+
+@dataclass(frozen=True)
+class ExtractVectorsConfig:
+    """Immutable configuration for steering vector extraction.
+
+    Attributes:
+        input_path: Path to the input data file.
+        model_name: Name or path of the model for extraction.
+        layer_indices: Tuple of layer indices to extract vectors from.
+        output_path: Path to save the extracted steering vectors.
+        min_samples: Minimum number of samples required for extraction.
+        batch_size: Batch size for processing during extraction.
+    """
+
+    input_path: str = ""
+    model_name: str = "Qwen/Qwen2.5-0.5B"
+    layer_indices: tuple[int, ...] = ()
+    output_path: str = "steering_vectors.pt"
+    min_samples: int = 10
+    batch_size: int = 4
+
+
+@dataclass(frozen=True)
+class SteeringInferenceConfig:
+    """Immutable configuration for steering inference experiments.
+
+    Attributes:
+        model_name: Name or path of the model for steering inference.
+        steering_vector_path: Path to the saved steering vectors file.
+        layer_indices: Tuple of layer indices to apply steering to.
+            Empty tuple means all layers.
+        coefficient: Steering strength multiplier.
+        dataset_name: Name of the dataset to run inference on.
+        dataset_config: Optional config name for datasets like GPQA.
+        batch_size: Batch size for inference (1 for 4-bit memory constraints).
+        max_new_tokens: Maximum number of new tokens to generate.
+        output_path: Path to save inference results.
+        limit: Optional limit on number of samples to process.
+    """
+
+    model_name: str = "Qwen/Qwen2.5-32B"
+    steering_vector_path: str = ""
+    layer_indices: tuple[int, ...] = ()
+    coefficient: float = 1.0
+    dataset_name: str = "HuggingFaceH4/MATH-500"
+    dataset_config: str | None = None
+    batch_size: int = 1
+    max_new_tokens: int = 512
+    output_path: str = ""
+    limit: int | None = None
+
+
+class ReflectionToken(TypedDict):
+    """Structured representation of a reflection token in model output.
+
+    Represents a single instance of self-reflection language detected
+    in the model's generated text.
+
+    Attributes:
+        text: The actual token text (e.g., "Wait", "Actually").
+        category: Category of reflection (e.g., "correction", "verification").
+        context: Surrounding context where the token appeared.
+        confidence: Confidence score in [0.0, 1.0] for the detection.
+    """
+
+    text: str
+    category: str
+    context: str
+    confidence: float
+
+
+class SampleWithReflection(TypedDict):
+    """Sample data augmented with reflection analysis results.
+
+    Extends the base sample structure with reflection-specific metrics
+    and detected tokens.
+
+    Attributes:
+        problem_id: Unique identifier for the problem.
+        problem: The problem text or question.
+        generated: The model's generated response.
+        reference_answer: The ground truth reference answer.
+        subject: Optional subject category (e.g., "algebra", "geometry").
+        level: Optional difficulty level of the problem.
+        reflection_tokens: List of detected reflection tokens.
+        reflection_count: Total count of reflection tokens found.
+        reflection_density: Ratio of reflection tokens to total tokens.
+    """
+
+    problem_id: str
+    problem: str
+    generated: str
+    reference_answer: str
+    subject: NotRequired[str | None]
+    level: NotRequired[int | None]
+    reflection_tokens: list[ReflectionToken]
+    reflection_count: int
+    reflection_density: float
+
+
+class RoscoeEvaluation(TypedDict):
+    """ROSCOE-based reasoning quality evaluation result.
+
+    Evaluates step-by-step reasoning quality using 5 core metrics
+    on a 1-5 scale.
+
+    Attributes:
+        faithfulness: Is each step grounded in the problem context? (1-5)
+        coherence: Do steps logically follow without contradictions? (1-5)
+        informativeness: Does each step add new relevant information? (1-5)
+        repetition: Absence of redundant steps (5 = no repetition, 1 = significant repetition)
+        completeness: Are all essential reasoning steps included? (1-5)
+        overall_score: Mean of the 5 metric scores.
+        passed_filter: True if overall_score >= threshold.
+        diagnosis: Categorical assessment per metric ("high"/"medium"/"low").
+    """
+
+    faithfulness: float
+    coherence: float
+    informativeness: float
+    repetition: float
+    completeness: float
+    overall_score: float
+    passed_filter: bool
+    diagnosis: dict[str, str]
+
+
+class ReflectionAnalysisReport(TypedDict):
+    """Aggregated report of reflection analysis across all samples.
+
+    Provides comprehensive statistics on reflection patterns detected
+    in a dataset of model outputs.
+
+    Attributes:
+        total_samples: Total number of samples analyzed.
+        total_tokens: Total reflection tokens detected across all samples.
+        avg_tokens_per_sample: Average reflection tokens per sample.
+        overall_density: Average reflection density across all samples.
+        token_frequency: Frequency count of each unique token text.
+        category_distribution: Distribution of tokens by category.
+        per_subject_stats: Reflection statistics broken down by subject.
+        per_level_stats: Reflection statistics broken down by difficulty level.
+        processing_errors: Number of samples that failed processing.
+    """
+
+    total_samples: int
+    total_tokens: int
+    avg_tokens_per_sample: float
+    overall_density: float
+    token_frequency: dict[str, int]
+    category_distribution: dict[str, int]
+    per_subject_stats: dict[str, dict[str, float | int]]
+    per_level_stats: dict[str, dict[str, float | int]]
+    processing_errors: int
+
+
+class SteeringVectorResult(TypedDict):
+    """Result of steering vector extraction.
+
+    Attributes:
+        vectors: Mapping of layer index to steering vector tensor.
+        metadata: Metadata about the extraction (model name, sample counts, etc.).
+    """
+
+    vectors: dict[int, Tensor]
+    metadata: dict[str, str | int | tuple[int, ...]]
+
+
+@dataclass(frozen=True)
+class LinearProbeConfig:
+    """Immutable configuration for linear probe experiments.
+
+    Attributes:
+        input_path: Path to the input data file.
+        model_name: Name or path of the model for probing.
+        layer_indices: Tuple of layer indices to probe.
+        test_size: Fraction of data to use for testing.
+        output_dir: Directory to save probe results.
+    """
+
+    input_path: str = ""
+    model_name: str = ""
+    layer_indices: tuple[int, ...] = ()
+    test_size: float = 0.2
+    output_dir: str = "outputs/linear_probe/"
+
+
+class ProbeMetrics(TypedDict):
+    """Metrics for a single probe layer.
+
+    Attributes:
+        layer_index: Index of the layer that was probed.
+        accuracy: Classification accuracy on the test set.
+        train_samples: Number of training samples used.
+        test_samples: Number of test samples used.
+    """
+
+    layer_index: int
+    accuracy: float
+    train_samples: int
+    test_samples: int
+
+
+class LinearProbeResult(TypedDict):
+    """Result of linear probe training and evaluation.
+
+    Attributes:
+        coefficients: Mapping of layer index to probe coefficients.
+        metrics: List of metrics for each probed layer.
+        metadata: Metadata about the probing experiment.
+    """
+
+    coefficients: dict[int, list[float]]
+    metrics: list[ProbeMetrics]
+    metadata: dict[str, str | int | tuple[int, ...]]

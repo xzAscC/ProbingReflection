@@ -1,0 +1,335 @@
+"""Steering vector extraction for modulating reflection behavior in LLMs.
+
+This module provides functions to extract steering vectors from model
+activations, which can be used to modulate self-reflection behavior
+ in language models.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from datetime import datetime
+from pathlib import Path
+
+import torch
+from torch import Tensor
+from tqdm import tqdm
+from transformers import (
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+)
+
+from probing_reflection.model_utils import get_device, get_dtype, load_model
+from probing_reflection.prompts import REFLECTION_TAXONOMY
+from probing_reflection.types import (
+    ExtractVectorsConfig,
+    SampleWithReflection,
+    SteeringVectorResult,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def classify_samples(
+    samples: list[SampleWithReflection],
+    min_samples: int = 10,
+) -> tuple[list[SampleWithReflection], list[SampleWithReflection]]:
+    """Split samples into reflection (R) and non-reflection (N) sets.
+
+    R set: samples with reflection_count > 0
+    N set: samples with reflection_count == 0
+
+    Args:
+        samples: List of samples with reflection analysis.
+        min_samples: Minimum required samples in each set.
+
+    Returns:
+        Tuple of (R_samples, N_samples).
+
+    Raises:
+        ValueError: If either R or N set has fewer than min_samples.
+    """
+    r_samples: list[SampleWithReflection] = []
+    n_samples: list[SampleWithReflection] = []
+
+    for sample in samples:
+        if sample["reflection_count"] > 0:
+            r_samples.append(sample)
+        else:
+            n_samples.append(sample)
+
+    if len(r_samples) < min_samples:
+        raise ValueError(
+            f"R set has {len(r_samples)} samples, but min_samples={min_samples} is required"
+        )
+    if len(n_samples) < min_samples:
+        raise ValueError(
+            f"N set has {len(n_samples)} samples, but min_samples={min_samples} is required"
+        )
+
+    return (r_samples, n_samples)
+
+
+def find_reflection_token_position(
+    tokenizer: PreTrainedTokenizerBase,
+    text: str,
+    reflection_tokens: list[str] | None = None,
+) -> int | None:
+    """Find the position of the first reflection token in text.
+
+    Args:
+        tokenizer: Tokenizer to use for tokenization
+        text: Text to search for reflection tokens
+        reflection_tokens: List of tokens to search for (default: all from REFLECTION_TAXONOMY)
+
+    Returns:
+        Index of first reflection token in tokenized sequence, or None if not found
+    """
+    if reflection_tokens is None:
+        reflection_tokens = [token for tokens in REFLECTION_TAXONOMY.values() for token in tokens]
+
+    reflection_tokens_lower = [t.lower() for t in reflection_tokens]
+    token_ids = tokenizer.encode(text, add_special_tokens=False)
+    tokens = tokenizer.convert_ids_to_tokens(token_ids)
+
+    for idx, token in enumerate(tokens):
+        token_lower = token.lower()
+        for ref_token in reflection_tokens_lower:
+            if ref_token in token_lower:
+                return idx
+
+    return None
+
+
+def extract_activation_at_position(
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizerBase,
+    text: str,
+    position: int,
+    layer_indices: tuple[int, ...],
+) -> dict[int, Tensor]:
+    """Extract hidden state activations at a specific token position.
+
+    Args:
+        model: The language model to extract activations from
+        tokenizer: Tokenizer for the model
+        text: Text to process
+        position: Token position to extract activation from
+        layer_indices: Which layers to extract activations from
+
+    Returns:
+        Dict mapping layer index to activation tensor (on CPU)
+
+    Raises:
+        IndexError: If position is out of bounds
+    """
+    with torch.no_grad():
+        inputs = tokenizer(text, return_tensors="pt")
+        inputs = {k: v.to(model.device) for k, v in inputs.items()}
+        outputs = model(**inputs, output_hidden_states=True)
+
+        seq_len = inputs["input_ids"].shape[1]
+        if position >= seq_len:
+            raise IndexError(f"Position {position} >= sequence length {seq_len}")
+
+        result: dict[int, Tensor] = {}
+        for layer in layer_indices:
+            hidden = outputs.hidden_states[layer + 1]
+            result[layer] = hidden[0, position, :].cpu()
+
+        return result
+
+
+def compute_difference_in_means(
+    r_activations: dict[int, list[Tensor]],
+    n_activations: dict[int, list[Tensor]],
+    layer_indices: tuple[int, ...],
+) -> dict[int, Tensor]:
+    """Compute steering vectors as difference in means.
+
+    For each layer: v = mean(R_activations) - mean(N_activations)
+
+    Args:
+        r_activations: Dict mapping layer index to list of activation tensors
+            (reflection samples)
+        n_activations: Dict mapping layer index to list of activation tensors
+            (non-reflection samples)
+        layer_indices: Tuple of layer indices to compute vectors for
+
+    Returns:
+        Dict mapping layer index to steering vector tensor
+
+    Raises:
+        ValueError: If any layer is missing from either R or N activations
+    """
+    vectors: dict[int, Tensor] = {}
+
+    for layer in layer_indices:
+        if layer not in r_activations or not r_activations[layer]:
+            raise ValueError(f"No R activations for layer {layer}")
+        if layer not in n_activations or not n_activations[layer]:
+            raise ValueError(f"No N activations for layer {layer}")
+
+        r_stack = torch.stack(r_activations[layer])
+        n_stack = torch.stack(n_activations[layer])
+
+        r_mean = r_stack.mean(dim=0)
+        n_mean = n_stack.mean(dim=0)
+
+        vectors[layer] = (r_mean - n_mean).cpu()
+
+    return vectors
+
+
+def save_steering_vectors(
+    vectors: dict[int, Tensor],
+    metadata: dict[str, str | int | tuple[int, ...]],
+    output_path: Path | str,
+) -> None:
+    """Save steering vectors to a .pt file with metadata.
+
+    Args:
+        vectors: Dict mapping layer index to steering vector tensor
+        metadata: Metadata dict with model_name, layer_indices, r_count, n_count, etc.
+        output_path: Path to save the .pt file
+
+    Raises:
+        ValueError: If any tensor is not on CPU
+    """
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    for layer, tensor in vectors.items():
+        if tensor.device.type != "cpu":
+            raise ValueError(f"Tensor for layer {layer} is not on CPU")
+
+    metadata_with_timestamp = dict(metadata)
+    metadata_with_timestamp["timestamp"] = datetime.now().isoformat()
+
+    save_dict: dict[str, Tensor | dict[str, str | int | tuple[int, ...]]] = {}
+    for layer, tensor in vectors.items():
+        save_dict[f"layer_{layer}"] = tensor
+    save_dict["metadata"] = metadata_with_timestamp
+
+    torch.save(save_dict, path)
+
+
+def extract_batch_activations(
+    samples: list[SampleWithReflection],
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizerBase,
+    layer_indices: tuple[int, ...],
+    batch_size: int = 4,
+    min_samples: int = 1,
+) -> tuple[dict[int, list[Tensor]], dict[int, list[Tensor]]]:
+    """Extract activations from samples in batches.
+
+    For R set: extracts at reflection token position
+    For N set: extracts at last token position
+
+    Args:
+        samples: Samples with reflection analysis
+        model: Language model
+        tokenizer: Tokenizer for the model
+        layer_indices: Layers to extract activations from
+        batch_size: Number of samples to process in each chunk
+
+    Returns:
+        Tuple of (R_activations_by_layer, N_activations_by_layer)
+    """
+    r_samples, n_samples = classify_samples(samples, min_samples=min_samples)
+
+    r_activations: dict[int, list[Tensor]] = {layer: [] for layer in layer_indices}
+    n_activations: dict[int, list[Tensor]] = {layer: [] for layer in layer_indices}
+
+    for batch_start in tqdm(range(0, len(r_samples), batch_size), desc="Extracting R activations"):
+        batch_end = min(batch_start + batch_size, len(r_samples))
+        batch = r_samples[batch_start:batch_end]
+
+        for sample in batch:
+            text = sample["generated"]
+            position = find_reflection_token_position(tokenizer, text)
+            if position is None:
+                logger.warning(f"Reflection token not found for sample {sample['problem_id']}")
+                continue
+            try:
+                activations = extract_activation_at_position(
+                    model, tokenizer, text, position, layer_indices
+                )
+                for layer, tensor in activations.items():
+                    r_activations[layer].append(tensor.cpu())
+            except torch.cuda.OutOfMemoryError:
+                torch.cuda.empty_cache()
+                logger.warning(f"CUDA OOM for R sample {sample['problem_id']}, skipping")
+
+    for batch_start in tqdm(range(0, len(n_samples), batch_size), desc="Extracting N activations"):
+        batch_end = min(batch_start + batch_size, len(n_samples))
+        batch = n_samples[batch_start:batch_end]
+
+        for sample in batch:
+            text = sample["generated"]
+            tokens = tokenizer.encode(text, add_special_tokens=False)
+            position = len(tokens) - 1
+            try:
+                activations = extract_activation_at_position(
+                    model, tokenizer, text, position, layer_indices
+                )
+                for layer, tensor in activations.items():
+                    n_activations[layer].append(tensor.cpu())
+            except torch.cuda.OutOfMemoryError:
+                torch.cuda.empty_cache()
+                logger.warning(f"CUDA OOM for N sample {sample['problem_id']}, skipping")
+
+    return r_activations, n_activations
+
+
+def extract_steering_vectors(config: ExtractVectorsConfig) -> SteeringVectorResult:
+    """Main pipeline to extract steering vectors from model activations.
+
+    Args:
+        config: Configuration with input_path, model_name, layer_indices, etc.
+
+    Returns:
+        SteeringVectorResult with vectors and metadata
+    """
+    samples: list[SampleWithReflection] = []
+    with open(config.input_path) as f:
+        for line in f:
+            samples.append(json.loads(line))
+
+    logger.info(f"Loaded {len(samples)} samples from {config.input_path}")
+
+    r_count = sum(sample["reflection_count"] > 0 for sample in samples)
+    n_count = len(samples) - r_count
+    logger.info(f"Classified: {r_count} R samples, {n_count} N samples")
+
+    device = get_device()
+    dtype = get_dtype(device)
+
+    logger.info(f"Loading model {config.model_name} on {device} with dtype {dtype}")
+    model, tokenizer = load_model(config.model_name, device, dtype)
+
+    r_activations, n_activations = extract_batch_activations(
+        samples,
+        model,
+        tokenizer,
+        config.layer_indices,
+        config.batch_size,
+        config.min_samples,
+    )
+
+    vectors = compute_difference_in_means(r_activations, n_activations, config.layer_indices)
+
+    metadata: dict[str, str | int | tuple[int, ...]] = {
+        "model_name": config.model_name,
+        "layer_indices": config.layer_indices,
+        "r_count": r_count,
+        "n_count": n_count,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+    save_steering_vectors(vectors, metadata, config.output_path)
+    logger.info(f"Saved steering vectors to {config.output_path}")
+
+    return SteeringVectorResult(vectors=vectors, metadata=metadata)
