@@ -32,6 +32,7 @@ dev = [
 target-version = "py312"
 line-length = 100
 src = ["src"]
+extend-exclude = ["src/probing_reflection/**/*.ipynb"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "N"]
