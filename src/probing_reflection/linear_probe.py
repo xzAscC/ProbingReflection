@@ -11,13 +11,14 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import IO, Protocol, cast
 
 import numpy as np
 from numpy import ndarray
-from sklearn.decomposition import PCA  # type: ignore[import-untyped]
-from sklearn.linear_model import LogisticRegression  # type: ignore[import-untyped]
-from sklearn.manifold import TSNE  # type: ignore[import-untyped]
-from sklearn.model_selection import train_test_split  # type: ignore[import-untyped]
+from sklearn.decomposition import PCA
+from sklearn.linear_model import LogisticRegression
+from sklearn.manifold import TSNE
+from sklearn.model_selection import train_test_split
 from torch import Tensor
 from tqdm import tqdm
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
@@ -36,6 +37,42 @@ from probing_reflection.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class NpzSaver(Protocol):
+    def __call__(self, file: IO[bytes], **arrays: ndarray) -> None: ...
+
+
+class ProbeFactory(Protocol):
+    def __call__(self, *, max_iter: int, random_state: int) -> LogisticRegression: ...
+
+
+class ScoringProbe(Protocol):
+    def score(self, features: ndarray, labels: ndarray) -> float: ...
+
+
+class Projector(Protocol):
+    def fit_transform(self, features: ndarray) -> ndarray: ...
+
+
+class TsneFactory(Protocol):
+    def __call__(self, *, n_components: int, random_state: int, perplexity: int) -> Projector: ...
+
+
+class PcaFactory(Protocol):
+    def __call__(self, *, n_components: int, random_state: int) -> Projector: ...
+
+
+class TrainTestSplitter(Protocol):
+    def __call__(
+        self,
+        features: ndarray,
+        labels: ndarray,
+        *,
+        test_size: float,
+        stratify: ndarray,
+        random_state: int,
+    ) -> tuple[ndarray, ndarray, ndarray, ndarray]: ...
 
 
 def collect_token_activations(
@@ -129,18 +166,18 @@ def train_linear_probe(
         features = np.vstack([r_stack, n_stack])
         labels = np.concatenate([np.ones(len(r_list)), np.zeros(len(n_list))])
 
-        x_train, x_test, y_train, y_test = train_test_split(
+        x_train, x_test, y_train, y_test = cast(TrainTestSplitter, train_test_split)(
             features, labels, test_size=test_size, stratify=labels, random_state=42
         )
 
-        probe = LogisticRegression(max_iter=1000, random_state=42)
+        probe = cast(ProbeFactory, LogisticRegression)(max_iter=1000, random_state=42)
         probe.fit(x_train, y_train)
 
         probes[layer] = probe
 
         layer_metrics = ProbeMetrics(
             layer_index=layer,
-            accuracy=float(probe.score(x_test, y_test)),
+            accuracy=float(cast(ScoringProbe, probe).score(x_test, y_test)),
             train_samples=len(y_train),
             test_samples=len(y_test),
         )
@@ -158,7 +195,7 @@ def evaluate_probe(
     """Evaluate a fitted probe on held-out activations."""
     return ProbeMetrics(
         layer_index=layer_index,
-        accuracy=float(probe.score(x_test, y_test)),
+        accuracy=float(cast(ScoringProbe, probe).score(x_test, y_test)),
         train_samples=0,
         test_samples=len(y_test),
     )
@@ -193,7 +230,9 @@ def generate_tsne_plot(
     features = np.vstack([r_stack, n_stack])
     labels = np.concatenate([np.ones(len(r_list)), np.zeros(len(n_list))])
 
-    tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, len(features) - 1))
+    tsne = cast(TsneFactory, TSNE)(
+        n_components=2, random_state=42, perplexity=min(30, len(features) - 1)
+    )
     embedded = tsne.fit_transform(features)
 
     path = Path(output_path)
@@ -254,7 +293,7 @@ def generate_pca_plot(
     features = np.vstack([r_stack, n_stack])
     labels = np.concatenate([np.ones(len(r_list)), np.zeros(len(n_list))])
 
-    pca = PCA(n_components=2, random_state=42)
+    pca = cast(PcaFactory, PCA)(n_components=2, random_state=42)
     embedded = pca.fit_transform(features)
 
     path = Path(output_path)
@@ -329,7 +368,8 @@ def save_probe_weights(
         else:
             save_arrays[f"metadata_{key}"] = np.array([value], dtype=object)
 
-    np.savez(path, **save_arrays)  # type: ignore[arg-type]
+    with open(path, "wb") as output_file:
+        cast(NpzSaver, np.savez)(output_file, **save_arrays)
 
 
 def run_linear_probe(config: LinearProbeConfig) -> LinearProbeResult:
@@ -341,6 +381,9 @@ def run_linear_probe(config: LinearProbeConfig) -> LinearProbeResult:
     Returns:
         LinearProbeResult with coefficients, metrics, and metadata.
     """
+    if not config.layer_indices:
+        raise ValueError("layer_indices must not be empty")
+
     samples: list[SampleWithReflection] = []
     with open(config.input_path) as f:
         for line in f:
@@ -357,7 +400,8 @@ def run_linear_probe(config: LinearProbeConfig) -> LinearProbeResult:
     r_activations, n_activations = collect_token_activations(
         samples, model, tokenizer, config.layer_indices
     )
-    logger.info(f"Collected activations from {len(r_activations.get(0, []))} R samples")
+    first_layer = config.layer_indices[0]
+    logger.info(f"Collected activations from {len(r_activations.get(first_layer, []))} R samples")
 
     probes, metrics = train_linear_probe(
         r_activations, n_activations, config.layer_indices, config.test_size
@@ -368,7 +412,6 @@ def run_linear_probe(config: LinearProbeConfig) -> LinearProbeResult:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if r_activations and n_activations:
-        first_layer = config.layer_indices[0] if config.layer_indices else 0
         generate_tsne_plot(r_activations, n_activations, output_dir / "tsne_plot.png", first_layer)
         generate_pca_plot(r_activations, n_activations, output_dir / "pca_plot.png", first_layer)
         logger.info("Generated visualizations")
@@ -377,12 +420,8 @@ def run_linear_probe(config: LinearProbeConfig) -> LinearProbeResult:
         "model_name": config.model_name,
         "layer_indices": config.layer_indices,
         "test_size": str(config.test_size),
-        "r_count": len(
-            r_activations.get(config.layer_indices[0] if config.layer_indices else 0, [])
-        ),
-        "n_count": len(
-            n_activations.get(config.layer_indices[0] if config.layer_indices else 0, [])
-        ),
+        "r_count": len(r_activations.get(first_layer, [])),
+        "n_count": len(n_activations.get(first_layer, [])),
         "timestamp": datetime.now().isoformat(),
     }
 
