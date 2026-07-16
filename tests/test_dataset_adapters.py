@@ -6,12 +6,60 @@ evaluation datasets (MATH-500, AIME, GPQA Diamond).
 
 from __future__ import annotations
 
+import pytest
+
 from probing_reflection.dataset_adapters import (
     DatasetSample,
     load_aime,
     load_gpqa_diamond,
     load_math500,
 )
+
+
+@pytest.fixture(autouse=True)
+def mock_huggingface_datasets(monkeypatch: pytest.MonkeyPatch) -> None:
+    math500 = [
+        {
+            "unique_id": f"math-{index}",
+            "problem": f"Problem {index}",
+            "answer": str(index),
+            "subject": "algebra",
+            "level": 1,
+        }
+        for index in range(500)
+    ]
+    aime: list[dict[str, object]] = [
+        {"id": f"aime-{index}", "problem": f"AIME {index}", "answer": str(index)}
+        for index in range(90)
+    ]
+    gpqa: list[dict[str, object]] = [
+        {
+            "Question": f"Science question {index}",
+            "Choice 1": "choice one",
+            "Choice 2": "choice two",
+            "Choice 3": "choice three",
+            "Choice 4": "choice four",
+            "Correct Answer": "choice one",
+        }
+        for index in range(198)
+    ]
+
+    def fake_load_dataset(
+        path: str,
+        config_name: str | None = None,
+        *,
+        split: str,
+    ) -> list[dict[str, object]]:
+        del config_name, split
+        if path == "HuggingFaceH4/MATH-500":
+            return math500
+        if path == "AI-MO/aimo-validation-aime":
+            return aime
+        if path == "Idavidrein/gpqa":
+            return gpqa
+        raise AssertionError(f"Unexpected dataset: {path}")
+
+    monkeypatch.setattr("probing_reflection.dataset_adapters.load_dataset", fake_load_dataset)
 
 
 class TestLoadMath500:
