@@ -58,10 +58,11 @@ This project follows an AI-assisted research workflow. See AGENTS.md for detaile
 If you use this code, please cite:
 
 ```bibtex
-@article{probing_reflection_2024,
-  title={From Emergence to Control: Probing and Modulating Self-Reflection in Language Models},
-  author={[Authors]},
-  year={2024}
+@article{zhu2025emergence,
+  title={From emergence to control: Probing and modulating self-reflection in language models},
+  author={Zhu, Xudong and Jiang, Jiachen and Khalili, Mohammad Mahdi and Zhu, Zhihui},
+  journal={arXiv preprint arXiv:2506.12217},
+  year={2025}
 }
 ```
 
