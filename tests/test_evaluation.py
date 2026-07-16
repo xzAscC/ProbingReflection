@@ -98,15 +98,13 @@ class TestAnswerJudgeParseJson:
         mock_tokenizer = MagicMock()
         judge.model = mock_model
         judge.tokenizer = mock_tokenizer
-        judge.device = "cpu"
+        judge.device = torch.device("cpu")
 
-        prompt = build_comparison_prompt("42", "42")
         json_response = '{"explanation": "Both are 42", "equivalent": true, "confidence": 0.95}'
 
         # Setup mock tokenizer behavior
-        mock_input_ids = MagicMock()
+        mock_input_ids = torch.tensor([[10, 11]])
         mock_attention_mask = MagicMock()
-        mock_input_ids.to.return_value = mock_input_ids
         mock_attention_mask.to.return_value = mock_attention_mask
         mock_tokenizer.return_value = {
             "input_ids": mock_input_ids,
@@ -114,16 +112,17 @@ class TestAnswerJudgeParseJson:
         }
 
         # Setup mock model.generate to return tensor-like output
-        mock_model.generate.return_value = torch.tensor([[1, 2, 3]])
+        mock_model.generate.return_value = torch.tensor([[10, 11, 12]])
 
         # Setup tokenizer.decode to return the JSON response
-        mock_tokenizer.decode.return_value = prompt + json_response
+        mock_tokenizer.decode.return_value = json_response
 
         result = judge._run_comparison("42", "42")
 
         assert result["explanation"] == "Both are 42"
         assert result["equivalent"] is True
         assert result["confidence"] == 0.95
+        assert mock_tokenizer.decode.call_args.args[0].tolist() == [12]
 
     def test_parse_json_response_no_json(self) -> None:
         """Response without JSON should return parse error."""

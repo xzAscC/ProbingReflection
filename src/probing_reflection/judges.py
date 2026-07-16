@@ -9,18 +9,15 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import Protocol, cast
+from typing import cast
 
 import torch
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
-from probing_reflection.model_utils import get_device, load_model
+from probing_reflection.batch_utils import decode_generated_tokens
+from probing_reflection.model_utils import GenerativeModel, get_device, load_model
 from probing_reflection.prompts import build_comparison_prompt, build_diagnosis_prompt
 from probing_reflection.types import JudgeVerdict, ReflectionToken
-
-
-class GenerativeModel(Protocol):
-    def generate(self, **kwargs: object) -> torch.Tensor: ...
 
 
 def _parse_json_response(response: str) -> dict[str, object]:
@@ -80,28 +77,15 @@ class BaseLLMJudge:
         self.model, self.tokenizer = load_model(self.model_name)
         self.device = get_device()
 
-    def _ensure_model_loaded(self) -> None:
-        """Raise an error if the model is not loaded.
-
-        Raises:
-            RuntimeError: If load_model() has not been called.
-        """
+    def _loaded_components(
+        self,
+    ) -> tuple[PreTrainedModel, PreTrainedTokenizerBase, torch.device]:
         if self.model is None or self.tokenizer is None or self.device is None:
             raise RuntimeError("Model not loaded. Call load_model() first.")
+        return self.model, self.tokenizer, self.device
 
     def _run_inference(self, prompt: str, max_new_tokens: int = 256) -> str:
-        self._ensure_model_loaded()
-
-        if self.tokenizer is None or self.model is None or self.device is None:
-            raise RuntimeError("Model not loaded. Call load_model() first.")
-
-        tokenizer = self.tokenizer
-        model = self.model
-        device = self.device
-
-        assert tokenizer is not None
-        assert model is not None
-        assert device is not None
+        model, tokenizer, device = self._loaded_components()
 
         inputs = tokenizer(prompt, return_tensors="pt")
         input_ids = inputs["input_ids"].to(device)
@@ -115,8 +99,7 @@ class BaseLLMJudge:
                 do_sample=False,
             )
 
-        generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        return str(generated_text)[len(prompt) :].strip()
+        return decode_generated_tokens(tokenizer, outputs[0], input_ids.shape[-1])
 
     def _parse_json_response(self, response: str) -> dict[str, object]:
         """Parse JSON from a model response.
