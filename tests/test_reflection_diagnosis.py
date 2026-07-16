@@ -14,9 +14,8 @@ from typing import Any
 
 import pytest
 
+from probing_reflection.prompts import REFLECTION_TAXONOMY, build_diagnosis_prompt
 from probing_reflection.reflection_diagnosis import (
-    REFLECTION_TAXONOMY,
-    build_diagnosis_prompt,
     diagnose_all,
     diagnose_sample,
     ensure_output_dir,
@@ -266,8 +265,7 @@ class TestReflectionJudge:
         judge = ReflectionJudge("test-model")
         assert judge.model_name == "test-model"
 
-    def test_reflection_judge_with_config(self) -> None:
-        """ReflectionJudge should accept ReflectionDiagnosisConfig."""
+    def test_reflection_judge_uses_configured_model_name(self) -> None:
         pytest.importorskip(
             "probing_reflection.reflection_diagnosis",
             reason="Waiting for ReflectionJudge implementation",
@@ -279,8 +277,8 @@ class TestReflectionJudge:
             model_name="test-model",
             batch_size=4,
         )
-        judge = ReflectionJudge(config)
-        assert judge.config == config
+        judge = ReflectionJudge(config.model_name)
+        assert judge.model_name == config.model_name
 
 
 class TestDiagnoseSample:
@@ -428,7 +426,7 @@ class TestParseJsonResponse:
             reason="Waiting for _parse_json_response implementation",
         )
 
-        from probing_reflection.reflection_diagnosis import _parse_json_response
+        from probing_reflection.judges import _parse_json_response
 
         response = (
             '{"tokens": [{"text": "wait", "category": "hesitation", '
@@ -437,8 +435,12 @@ class TestParseJsonResponse:
         result = _parse_json_response(response)
 
         assert "tokens" in result
-        assert len(result["tokens"]) == 1
-        assert result["tokens"][0]["text"] == "wait"
+        tokens = result["tokens"]
+        assert isinstance(tokens, list)
+        assert len(tokens) == 1
+        first_token = tokens[0]
+        assert isinstance(first_token, dict)
+        assert first_token["text"] == "wait"
 
     def test_parse_json_response_empty_tokens(self) -> None:
         """_parse_json_response should handle empty tokens list."""
@@ -447,7 +449,7 @@ class TestParseJsonResponse:
             reason="Waiting for _parse_json_response implementation",
         )
 
-        from probing_reflection.reflection_diagnosis import _parse_json_response
+        from probing_reflection.judges import _parse_json_response
 
         response = '{"tokens": []}'
         result = _parse_json_response(response)
@@ -461,14 +463,13 @@ class TestParseJsonResponse:
             reason="Waiting for _parse_json_response implementation",
         )
 
-        from probing_reflection.reflection_diagnosis import _parse_json_response
+        from probing_reflection.judges import _parse_json_response
 
         # Malformed JSON - missing closing brace
         response = '{"tokens": [{"text": "wait"'
         result = _parse_json_response(response)
 
-        # Should return empty tokens or error indicator
-        assert result["tokens"] == [] or "error" in result
+        assert result == {}
 
 
 # ============================================================================

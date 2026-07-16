@@ -1,10 +1,7 @@
 """Reflection token diagnosis and extraction module.
 
-This module provides prompt templates for identifying self-reflection tokens
-in model outputs. Reflection tokens indicate moments where a model exhibits
-metacognitive behaviors like hesitation, self-correction, or verification.
-
-The taxonomy is based on academic literature on self-reflection in language models.
+This module provides functions for diagnosing self-reflection tokens
+in model outputs using LLM-based judgment.
 """
 
 from __future__ import annotations
@@ -12,16 +9,13 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from pathlib import Path
+from typing import Protocol
 
-import torch
 from tqdm import tqdm
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    PreTrainedModel,
-    PreTrainedTokenizerBase,
-)
 
+from probing_reflection.judges import ReflectionJudge
+from probing_reflection.prompts import REFLECTION_TAXONOMY
+from probing_reflection.roscoe_metrics import RoscoeJudge
 from probing_reflection.types import (
     ReflectionAnalysisReport,
     ReflectionDiagnosisConfig,
@@ -29,14 +23,9 @@ from probing_reflection.types import (
     SampleWithReflection,
 )
 
-# Validated reflection token taxonomy (examples, not exhaustive)
-REFLECTION_TAXONOMY: dict[str, list[str]] = {
-    "hesitation": ["wait", "hmm", "ah", "oh", "umm"],
-    "qualification": ["but", "however", "maybe", "actually", "although"],
-    "verification": ["check", "verify", "double-check", "reconsider"],
-    "redirection": ["alternatively", "on the other hand", "let me think"],
-    "transition": ["therefore", "so", "thus", "hence"],
-}
+
+class ReflectionJudgeProtocol(Protocol):
+    def judge(self, text: str) -> list[ReflectionToken]: ...
 
 
 def ensure_output_dir(output_dir: str | Path) -> Path:
@@ -53,219 +42,9 @@ def ensure_output_dir(output_dir: str | Path) -> Path:
     return path
 
 
-def build_diagnosis_prompt(text: str) -> str:
-    """Build a prompt for extracting reflection tokens from text.
-
-    Creates a structured prompt that asks an LLM to identify self-reflection
-    tokens in the provided text. The prompt emphasizes context-dependent
-    judgment to avoid false positives (e.g., "wait" as a command vs. hesitation).
-
-    Args:
-        text: The text to analyze for reflection tokens.
-
-    Returns:
-        A formatted prompt string for the diagnosis model.
-
-    Example:
-        >>> prompt = build_diagnosis_prompt("Wait, let me think about this.")
-        >>> # Returns prompt asking LLM to identify reflection tokens
-    """
-    taxonomy_examples = "\n".join(
-        f"  - {category}: {', '.join(tokens)}" for category, tokens in REFLECTION_TAXONOMY.items()
-    )
-
-    return f"""Identify self-reflection tokens in the following text.
-
-Self-reflection tokens indicate metacognitive moments where the model exhibits
-hesitation, self-correction, verification, or cognitive redirection.
-
-EXAMPLE CATEGORIES (not exhaustive - use judgment):
-{taxonomy_examples}
-
-CRITICAL: Context matters! Not every instance of these words indicates reflection.
-- "Wait for the result" → NOT reflection (imperative command)
-- "Wait, that doesn't seem right" → IS reflection (hesitation marker)
-- "Check the box" → NOT reflection (instruction)
-- "Let me check if this is correct" → IS reflection (verification)
-
-Judge based on whether the token signals genuine metacognitive activity.
-
-Analyze this text:
-{text}
-
-Respond in JSON format with this schema:
-{{"tokens": [{{"text": "...", "category": "...", "context": "...", "confidence": 0.0-1.0}}]}}
-
-Requirements:
-- text: the exact reflection token found
-- category: one of hesitation, qualification, verification, redirection, transition, or other
-- context: a brief phrase showing how the token was used
-- confidence: 0.0 (not reflection) to 1.0 (definitely reflection)
-
-If no reflection tokens are found, return: {{"tokens": []}}"""
-
-
-def _parse_json_response(response: str) -> dict[str, object]:
-    """Parse JSON response from model output.
-
-    Extracts and parses JSON from a response string, handling malformed
-    and missing JSON gracefully.
-
-    Args:
-        response: The raw model output text.
-
-    Returns:
-        A dict with "tokens" key containing list of token dicts.
-        On parse failure: {"tokens": [], "error": "parse_failed"}
-        On no JSON found: {"tokens": [], "error": "no_json_found"}
-    """
-    try:
-        # Try to find JSON in the response
-        start_idx = response.find("{")
-        end_idx = response.rfind("}") + 1
-        if start_idx == -1 or end_idx == 0:
-            return {"tokens": [], "error": "no_json_found"}
-
-        json_str = response[start_idx:end_idx]
-        data = json.loads(json_str)
-
-        if "tokens" not in data:
-            return {"tokens": []}
-
-        # Return raw dict structure (don't convert to ReflectionToken)
-        return {"tokens": data["tokens"]}
-    except json.JSONDecodeError:
-        return {"tokens": [], "error": "parse_failed"}
-    except (KeyError, TypeError, ValueError):
-        return {"tokens": [], "error": "parse_failed"}
-
-
-class ReflectionJudge:
-    """LLM-based judge for identifying reflection tokens in text.
-
-    Uses a language model to detect self-reflection tokens that indicate
-    metacognitive moments like hesitation, verification, or self-correction.
-
-    Attributes:
-        config: Configuration for the diagnosis pipeline.
-        model_name: Name or path of the judge model.
-        model: The loaded language model (None until load_model is called).
-        tokenizer: The loaded tokenizer (None until load_model is called).
-        device: Device the model is running on (None until load_model is called).
-    """
-
-    def __init__(self, config: ReflectionDiagnosisConfig | str) -> None:
-        """Initialize the reflection judge.
-
-        Args:
-            config: Either a ReflectionDiagnosisConfig object or a model name string.
-                If a string is provided, a default config is created with that model.
-        """
-        if isinstance(config, str):
-            self.config = ReflectionDiagnosisConfig(model_name=config)
-        else:
-            self.config = config
-
-        self.model_name = self.config.model_name
-        self.model: PreTrainedModel | None = None
-        self.tokenizer: PreTrainedTokenizerBase | None = None
-        self.device: torch.device | None = None
-
-    def load_model(self) -> None:
-        """Load the model and tokenizer.
-
-        Follows the inference.py pattern with bfloat16 precision on CUDA
-        and float32 on CPU. Sets up pad_token to eos_token if not present.
-        """
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        dtype = torch.bfloat16 if self.device.type == "cuda" else torch.float32
-
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_name,
-            torch_dtype=dtype,
-        )
-        self.model.eval()  # type: ignore[no-untyped-call]
-        self.model = self.model.to(self.device)  # type: ignore[arg-type]
-
-    def _parse_json_response(self, response: str) -> list[ReflectionToken]:
-        """Parse the JSON response from the model.
-
-        Args:
-            response: The raw model output text.
-
-        Returns:
-            List of ReflectionToken dicts, or empty list if parsing fails.
-        """
-        try:
-            # Try to find JSON in the response
-            start_idx = response.find("{")
-            end_idx = response.rfind("}") + 1
-            if start_idx == -1 or end_idx == 0:
-                return []
-
-            json_str = response[start_idx:end_idx]
-            data = json.loads(json_str)
-
-            if "tokens" not in data:
-                return []
-
-            tokens: list[ReflectionToken] = []
-            for token_data in data["tokens"]:
-                if all(k in token_data for k in ("text", "category", "context", "confidence")):
-                    tokens.append(
-                        ReflectionToken(
-                            text=str(token_data["text"]),
-                            category=str(token_data["category"]),
-                            context=str(token_data["context"]),
-                            confidence=float(token_data["confidence"]),
-                        )
-                    )
-            return tokens
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-            return []
-
-    def judge(self, text: str) -> list[ReflectionToken]:
-        """Extract reflection tokens from text.
-
-        Args:
-            text: The text to analyze for reflection tokens.
-
-        Returns:
-            List of detected reflection tokens with their metadata.
-
-        Raises:
-            RuntimeError: If the model has not been loaded yet.
-        """
-        if self.model is None or self.tokenizer is None or self.device is None:
-            raise RuntimeError("Model not loaded. Call load_model() before judge().")
-
-        prompt = build_diagnosis_prompt(text)
-
-        inputs = self.tokenizer(prompt, return_tensors="pt", padding=True)
-        input_ids = inputs["input_ids"].to(self.device)
-        attention_mask = inputs["attention_mask"].to(self.device)
-
-        with torch.no_grad():
-            outputs = self.model.generate(  # type: ignore[operator]
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=512,
-                do_sample=False,
-                pad_token_id=self.tokenizer.eos_token_id,
-            )
-
-        generated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-        response = str(generated_text)[len(prompt) :].strip()
-
-        return self._parse_json_response(response)
-
-
-def diagnose_sample(judge: ReflectionJudge, sample: dict[str, object]) -> SampleWithReflection:
+def diagnose_sample(
+    judge: ReflectionJudgeProtocol, sample: dict[str, object]
+) -> SampleWithReflection:
     """Diagnose a single sample for reflection tokens.
 
     Analyzes the generated text from a sample to detect self-reflection
@@ -281,13 +60,6 @@ def diagnose_sample(judge: ReflectionJudge, sample: dict[str, object]) -> Sample
             - reflection_tokens: List of detected ReflectionToken objects
             - reflection_count: Number of reflection tokens found
             - reflection_density: Reflection tokens per 100 words
-
-    Example:
-        >>> judge = ReflectionJudge("model-name")
-        >>> judge.load_model()
-        >>> result = diagnose_sample(judge, {"generated": "Wait, let me think..."})
-        >>> print(result["reflection_count"])
-        1
     """
     generated = str(sample.get("generated", ""))
 
@@ -337,7 +109,7 @@ def diagnose_sample(judge: ReflectionJudge, sample: dict[str, object]) -> Sample
 
 def diagnose_all(
     config: ReflectionDiagnosisConfig,
-    judge: ReflectionJudge | None = None,
+    judge: ReflectionJudgeProtocol | None = None,
 ) -> tuple[list[SampleWithReflection], ReflectionAnalysisReport]:
     """Diagnose reflection tokens across all samples in a JSONL file.
 
@@ -346,18 +118,13 @@ def diagnose_all(
 
     Args:
         config: Configuration containing input_path, output_dir, and model settings.
-        judge: Optional pre-configured ReflectionJudge. If None, creates and loads
-            a new judge from config.
+        judge: Optional pre-configured ReflectionJudge or RoscoeJudge. If None,
+            creates and loads a new judge based on config.judge_type.
 
     Returns:
         A tuple containing:
             - List of SampleWithReflection dicts with original fields plus analysis
             - ReflectionAnalysisReport with aggregated statistics
-
-    Example:
-        >>> config = ReflectionDiagnosisConfig(input_path="samples.jsonl")
-        >>> samples, report = diagnose_all(config)
-        >>> print(f"Found {report['total_tokens']} reflection tokens")
     """
     ensure_output_dir(config.output_dir)
 
@@ -380,11 +147,11 @@ def diagnose_all(
         lines = f.readlines()
 
     if judge is None and lines:
-        judge = ReflectionJudge(config)
-        try:
-            judge.load_model()
-        except Exception:
-            judge = None
+        if config.judge_type == "roscoe":
+            judge = RoscoeJudge(config.model_name)
+        else:
+            judge = ReflectionJudge(config.model_name)
+        judge.load_model()
 
     for line in tqdm(lines, desc="Diagnosing reflection tokens"):
         total_samples += 1
@@ -453,12 +220,7 @@ def write_analysis_report(report: ReflectionAnalysisReport, output_path: Path | 
 
     Args:
         report: The ReflectionAnalysisReport to write.
-        output_path: Path to the output JSON file. Parent directories
-            will be created if they don't exist.
-
-    Example:
-        >>> report = diagnose_all(config)
-        >>> write_analysis_report(report, "outputs/report.json")
+        output_path: Path to the output JSON file.
     """
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -476,10 +238,6 @@ def write_analyzed_jsonl(
     Args:
         samples: List of samples with reflection analysis results.
         output_path: Path to the output JSONL file.
-
-    Example:
-        >>> samples = [{"problem_id": "1", "reflection_count": 2, ...}]
-        >>> write_analyzed_jsonl(samples, "analyzed.jsonl")
     """
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -487,3 +245,15 @@ def write_analyzed_jsonl(
     with open(path, "w") as f:
         for sample in samples:
             f.write(json.dumps(sample) + "\n")
+
+
+__all__ = [
+    "REFLECTION_TAXONOMY",
+    "ReflectionJudge",
+    "RoscoeJudge",
+    "diagnose_all",
+    "diagnose_sample",
+    "ensure_output_dir",
+    "write_analysis_report",
+    "write_analyzed_jsonl",
+]

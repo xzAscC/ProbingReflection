@@ -174,6 +174,7 @@ class ReflectionDiagnosisConfig:
         model_name: Name or path of the model for token analysis.
         batch_size: Batch size for processing samples.
         max_retries: Maximum number of retries for failed API calls.
+        judge_type: Type of judge to use - "reflection" or "roscoe".
     """
 
     input_path: str = ""
@@ -181,6 +182,7 @@ class ReflectionDiagnosisConfig:
     model_name: str = "Qwen/Qwen3.5-27B"
     batch_size: int = 1
     max_retries: int = 3
+    judge_type: str = "reflection"
 
 
 @dataclass(frozen=True)
@@ -280,6 +282,33 @@ class SampleWithReflection(TypedDict):
     reflection_tokens: list[ReflectionToken]
     reflection_count: int
     reflection_density: float
+
+
+class RoscoeEvaluation(TypedDict):
+    """ROSCOE-based reasoning quality evaluation result.
+
+    Evaluates step-by-step reasoning quality using 5 core metrics
+    on a 1-5 scale.
+
+    Attributes:
+        faithfulness: Is each step grounded in the problem context? (1-5)
+        coherence: Do steps logically follow without contradictions? (1-5)
+        informativeness: Does each step add new relevant information? (1-5)
+        repetition: Absence of redundant steps (5 = no repetition, 1 = significant repetition)
+        completeness: Are all essential reasoning steps included? (1-5)
+        overall_score: Mean of the 5 metric scores.
+        passed_filter: True if overall_score >= threshold.
+        diagnosis: Categorical assessment per metric ("high"/"medium"/"low").
+    """
+
+    faithfulness: float
+    coherence: float
+    informativeness: float
+    repetition: float
+    completeness: float
+    overall_score: float
+    passed_filter: bool
+    diagnosis: dict[str, str]
 
 
 class ReflectionAnalysisReport(TypedDict):
