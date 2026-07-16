@@ -7,6 +7,9 @@ name = "probing_reflection"
 version = "0.1.0"
 requires-python = ">=3.12"
 description = "ProbingReflection - Probing and Modulating Self-Reflection in Language Models"
+dependencies = [
+    "jupyter>=1.1.1",
+]
 
 [project.scripts]
 probing-reflection = "probing_reflection.__main__:main"
