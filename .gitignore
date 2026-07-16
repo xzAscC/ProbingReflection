@@ -27,11 +27,29 @@ build/
 htmlcov/
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
 
 # Environment
 .env
 .env.local
 
 # Outputs
-
 outputs/
+
+# Local research data and generated artifacts
+data/
+figures/
+src/probing_reflection/*.csv
+src/probing_reflection/*.ipynb
+src/probing_reflection/*.pdf
+src/probing_reflection/*.png
+
+# Local agent workflow state
+.omo/
+.sisyphus/
+
+# Local TMLR repository
+67d0fc7176c97e12c92d4271/

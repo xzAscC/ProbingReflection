@@ -1,0 +1,17 @@
+# Keep Git-ignored local research material searchable by OpenCode/ripgrep.
+!.omo/
+!.omo/**
+!.sisyphus/
+!.sisyphus/**
+!67d0fc7176c97e12c92d4271/
+!67d0fc7176c97e12c92d4271/**
+!data/
+!data/**
+!figures/
+!figures/**
+!src/probing_reflection/.ipynb_checkpoints/
+!src/probing_reflection/.ipynb_checkpoints/**
+!src/probing_reflection/*.csv
+!src/probing_reflection/*.ipynb
+!src/probing_reflection/*.pdf
+!src/probing_reflection/*.png
