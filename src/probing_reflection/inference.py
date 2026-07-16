@@ -8,83 +8,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import cast
 
 import torch
 from datasets import load_dataset  # type: ignore[import-untyped]
 from tqdm import tqdm
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    PreTrainedModel,
-    PreTrainedTokenizerBase,
-)
 
+from probing_reflection.batch_utils import prepare_batch
+from probing_reflection.model_utils import load_model
+from probing_reflection.prompts import format_cot_prompt
 from probing_reflection.types import InferenceConfig
-
-
-def prepare_batch(tokenizer: PreTrainedTokenizerBase, problems: list[str]) -> dict[str, list[int]]:
-    """Prepare a batch of problems for model inference.
-
-    Sets up left padding for Qwen model compatibility.
-
-    Args:
-        tokenizer: The tokenizer to use.
-        problems: List of problem strings to tokenize.
-
-    Returns:
-        Tokenized batch with input_ids and attention_mask.
-    """
-    tokenizer.padding_side = "left"
-
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    result = tokenizer(problems, padding=True, return_tensors=None)
-
-    return cast(dict[str, list[int]], result)
-
-
-def format_cot_prompt(problem: str) -> str:
-    """Format a math problem with chain-of-thought prompting.
-
-    Args:
-        problem: The math problem text.
-
-    Returns:
-        Formatted prompt with CoT instructions.
-    """
-    return (
-        f"Please reason step by step, and put your final answer within \\boxed{{}}."
-        f"\n\nProblem: {problem}\n\nSolution:"
-    )
-
-
-def load_model(config: InferenceConfig) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
-    """Load model and tokenizer with bfloat16 precision.
-
-    Args:
-        config: Inference configuration containing model name.
-
-    Returns:
-        Tuple of (model, tokenizer).
-    """
-    tokenizer = AutoTokenizer.from_pretrained(config.model_name)
-
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
-
-    model = AutoModelForCausalLM.from_pretrained(
-        config.model_name,
-        torch_dtype=dtype,
-    )
-    model.eval()  # type: ignore[no-untyped-call]
-    model = model.to(device)  # type: ignore[arg-type]
-
-    return model, tokenizer
 
 
 def run_inference(config: InferenceConfig) -> Path:
@@ -99,7 +31,7 @@ def run_inference(config: InferenceConfig) -> Path:
     Returns:
         Path to the output JSONL file.
     """
-    model, tokenizer = load_model(config)
+    model, tokenizer = load_model(config.model_name)
     dataset = load_dataset(config.dataset_name, split="test")
 
     output_path = Path(config.output_path)

@@ -9,20 +9,16 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import torch
 from datasets import load_dataset  # type: ignore[import-untyped]
 from torch import Tensor
 from tqdm import tqdm
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    BitsAndBytesConfig,
-    PreTrainedModel,
-    PreTrainedTokenizerBase,
-)
 
+from probing_reflection.batch_utils import get_item_field, prepare_batch
+from probing_reflection.model_utils import load_model_4bit
+from probing_reflection.prompts import format_cot_prompt
 from probing_reflection.types import SteeringInferenceConfig
 
 
@@ -42,21 +38,6 @@ def get_output_path(
     path = Path(base_dir) / dataset / condition / "results.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
-
-
-def unload_model(model: PreTrainedModel) -> None:
-    """Unload a model and free GPU memory.
-
-    Args:
-        model: The model to unload.
-    """
-    import gc
-
-    del model
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
-    gc.collect()
 
 
 def load_steering_vectors(path: Path | str) -> dict[int, Tensor]:
@@ -96,39 +77,6 @@ def load_steering_vectors(path: Path | str) -> dict[int, Tensor]:
     return vectors
 
 
-def load_model_4bit(model_name: str) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
-    """Load model and tokenizer with 4-bit quantization.
-
-    Uses bitsandbytes NF4 quantization for memory efficiency.
-
-    Args:
-        model_name: Name or path of the model.
-
-    Returns:
-        Tuple of (model, tokenizer).
-    """
-    bnb_config = BitsAndBytesConfig(  # type: ignore[no-untyped-call]
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_use_double_quant=True,
-    )
-
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        quantization_config=bnb_config,
-        device_map="auto",
-    )
-    model.eval()  # type: ignore[no-untyped-call]
-
-    return model, tokenizer
-
-
 def create_steering_hook(
     vector: Tensor, coefficient: float
 ) -> Callable[
@@ -149,72 +97,17 @@ def create_steering_hook(
     ) -> Tensor | tuple[Tensor, ...]:
         if isinstance(output, tuple):
             hidden_states = output[0]
-            # Cast vector to match hidden_states dtype and device
             steering = coefficient * vector.to(
                 dtype=hidden_states.dtype, device=hidden_states.device
             )
             hidden_states = hidden_states + steering
             return (hidden_states,) + output[1:]
         else:
-            # Cast vector to match output dtype and device
             steering = coefficient * vector.to(dtype=output.dtype, device=output.device)
             output = output + steering
             return output
 
     return hook
-
-
-def format_cot_prompt(problem: str) -> str:
-    """Format a math problem with chain-of-thought prompting.
-
-    Args:
-        problem: The math problem text.
-
-    Returns:
-        Formatted prompt with CoT instructions.
-    """
-    return (
-        f"Please reason step by step, and put your final answer within \\boxed{{}}."
-        f"\n\nProblem: {problem}\n\nSolution:"
-    )
-
-
-def _prepare_batch(tokenizer: PreTrainedTokenizerBase, problems: list[str]) -> dict[str, Any]:
-    """Prepare a batch of problems for model inference.
-
-    Sets up left padding for Qwen model compatibility.
-
-    Args:
-        tokenizer: The tokenizer to use.
-        problems: List of problem strings to tokenize.
-
-    Returns:
-        Tokenized batch with input_ids and attention_mask.
-    """
-    tokenizer.padding_side = "left"
-
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    result = tokenizer(problems, padding=True, return_tensors=None)
-    return cast(dict[str, Any], result)
-
-
-def _get_item_field(item: dict[str, Any], field_names: list[str], default: str = "") -> str:
-    """Get a field from a dataset item, trying multiple possible field names.
-
-    Args:
-        item: Dataset item dictionary.
-        field_names: List of possible field names to try.
-        default: Default value if no field is found.
-
-    Returns:
-        The field value or default.
-    """
-    for name in field_names:
-        if name in item:
-            return str(item[name])
-    return default
 
 
 def run_steering_inference(config: SteeringInferenceConfig) -> Path:
@@ -272,10 +165,10 @@ def run_steering_inference(config: SteeringInferenceConfig) -> Path:
             ):
                 batch_end = min(i + config.batch_size, num_samples)
                 batch_items = [dataset[j] for j in range(i, batch_end)]
-                problems = [_get_item_field(item, ["problem", "question"]) for item in batch_items]
+                problems = [get_item_field(item, ["problem", "question"]) for item in batch_items]
                 prompts = [format_cot_prompt(p) for p in problems]
 
-                inputs = _prepare_batch(tokenizer, prompts)
+                inputs = prepare_batch(tokenizer, prompts)
                 input_ids = torch.tensor(inputs["input_ids"]).to(device)
                 attention_mask = torch.tensor(inputs["attention_mask"]).to(device)
 
@@ -291,7 +184,7 @@ def run_steering_inference(config: SteeringInferenceConfig) -> Path:
                 except torch.cuda.OutOfMemoryError:
                     torch.cuda.empty_cache()
                     for item in batch_items:
-                        problem = _get_item_field(item, ["problem", "question"])
+                        problem = get_item_field(item, ["problem", "question"])
                         prompt = format_cot_prompt(problem)
                         single_input = tokenizer(prompt, return_tensors="pt")
                         single_ids = single_input["input_ids"].to(device)
@@ -310,14 +203,14 @@ def run_steering_inference(config: SteeringInferenceConfig) -> Path:
                         generated_text = str(generated_text)[len(prompt) :].strip()
 
                         result_entry = {
-                            "problem_id": _get_item_field(item, ["unique_id", "id", "problem_id"]),
+                            "problem_id": get_item_field(item, ["unique_id", "id", "problem_id"]),
                             "problem": problem,
                             "generated": generated_text,
-                            "reference_answer": _get_item_field(
+                            "reference_answer": get_item_field(
                                 item, ["answer", "solution", "reference"]
                             ),
-                            "subject": _get_item_field(item, ["subject", "category"], ""),
-                            "level": _get_item_field(item, ["level", "difficulty"], ""),
+                            "subject": get_item_field(item, ["subject", "category"], ""),
+                            "level": get_item_field(item, ["level", "difficulty"], ""),
                             "prompt": prompt,
                         }
                         f.write(json.dumps(result_entry) + "\n")
@@ -330,14 +223,14 @@ def run_steering_inference(config: SteeringInferenceConfig) -> Path:
 
                     problem = problems[j]
                     result_entry = {
-                        "problem_id": _get_item_field(item, ["unique_id", "id", "problem_id"]),
+                        "problem_id": get_item_field(item, ["unique_id", "id", "problem_id"]),
                         "problem": problem,
                         "generated": generated_text,
-                        "reference_answer": _get_item_field(
+                        "reference_answer": get_item_field(
                             item, ["answer", "solution", "reference"]
                         ),
-                        "subject": _get_item_field(item, ["subject", "category"], ""),
-                        "level": _get_item_field(item, ["level", "difficulty"], ""),
+                        "subject": get_item_field(item, ["subject", "category"], ""),
+                        "level": get_item_field(item, ["level", "difficulty"], ""),
                         "prompt": prompt,
                     }
                     f.write(json.dumps(result_entry) + "\n")
