@@ -2,15 +2,10 @@
 
 This module provides functions to extract steering vectors from model
 activations, which can be used to modulate self-reflection behavior
-in language models.
-
-The extraction pipeline involves:
-1. Classifying samples into reflection (R) and non-reflection (N) sets
-2. Finding token positions of reflection markers
-3. Extracting activations at those positions
-4. Computing difference-in-means vectors
-5. Saving vectors for later injection
+ in language models.
 """
+
+from __future__ import annotations
 
 import json
 import logging
@@ -21,13 +16,12 @@ import torch
 from torch import Tensor
 from tqdm import tqdm
 from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
     PreTrainedModel,
     PreTrainedTokenizerBase,
 )
 
-from probing_reflection.reflection_diagnosis import REFLECTION_TAXONOMY
+from probing_reflection.model_utils import get_device, get_dtype, load_model
+from probing_reflection.prompts import REFLECTION_TAXONOMY
 from probing_reflection.types import (
     ExtractVectorsConfig,
     SampleWithReflection,
@@ -135,18 +129,13 @@ def extract_activation_at_position(
         inputs = {k: v.to(model.device) for k, v in inputs.items()}
         outputs = model(**inputs, output_hidden_states=True)
 
-        # outputs.hidden_states is a tuple: (embedding, layer1, layer2, ..., final)
-        # hidden_states[0] = embedding layer
-        # hidden_states[i+1] = output of layer i
         seq_len = inputs["input_ids"].shape[1]
         if position >= seq_len:
             raise IndexError(f"Position {position} >= sequence length {seq_len}")
 
         result: dict[int, Tensor] = {}
         for layer in layer_indices:
-            # +1 because hidden_states[0] is embedding
             hidden = outputs.hidden_states[layer + 1]
-            # Extract at position, batch index 0, move to CPU
             result[layer] = hidden[0, position, :].cpu()
 
         return result
@@ -182,12 +171,11 @@ def compute_difference_in_means(
         if layer not in n_activations or not n_activations[layer]:
             raise ValueError(f"No N activations for layer {layer}")
 
-        # Stack and compute means
-        r_stack = torch.stack(r_activations[layer])  # [N_R, hidden_dim]
-        n_stack = torch.stack(n_activations[layer])  # [N_N, hidden_dim]
+        r_stack = torch.stack(r_activations[layer])
+        n_stack = torch.stack(n_activations[layer])
 
-        r_mean = r_stack.mean(dim=0)  # [hidden_dim]
-        n_mean = n_stack.mean(dim=0)  # [hidden_dim]
+        r_mean = r_stack.mean(dim=0)
+        n_mean = n_stack.mean(dim=0)
 
         vectors[layer] = (r_mean - n_mean).cpu()
 
@@ -239,9 +227,6 @@ def extract_batch_activations(
     For R set: extracts at reflection token position
     For N set: extracts at last token position
 
-    Processes samples in chunks of batch_size. On CUDA OOM, falls back to
-    single-sample processing with retry.
-
     Args:
         samples: Samples with reflection analysis
         model: Language model
@@ -251,7 +236,6 @@ def extract_batch_activations(
 
     Returns:
         Tuple of (R_activations_by_layer, N_activations_by_layer)
-        Each is dict mapping layer index to list of activation tensors
     """
     r_samples, n_samples = classify_samples(samples, min_samples=1)
 
@@ -330,9 +314,6 @@ def extract_batch_activations(
 def extract_steering_vectors(config: ExtractVectorsConfig) -> SteeringVectorResult:
     """Main pipeline to extract steering vectors from model activations.
 
-    Orchestrates: load data → classify → load model → extract activations →
-    compute vectors → save results.
-
     Args:
         config: Configuration with input_path, model_name, layer_indices, etc.
 
@@ -349,14 +330,11 @@ def extract_steering_vectors(config: ExtractVectorsConfig) -> SteeringVectorResu
     r_samples, n_samples = classify_samples(samples, config.min_samples)
     logger.info(f"Classified: {len(r_samples)} R samples, {len(n_samples)} N samples")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
+    device = get_device()
+    dtype = get_dtype(device)
 
     logger.info(f"Loading model {config.model_name} on {device} with dtype {dtype}")
-    tokenizer = AutoTokenizer.from_pretrained(config.model_name)
-    model = AutoModelForCausalLM.from_pretrained(config.model_name, torch_dtype=dtype)
-    model.eval()  # type: ignore[no-untyped-call]
-    model = model.to(device)  # type: ignore[arg-type]
+    model, tokenizer = load_model(config.model_name, device, dtype)
 
     r_activations, n_activations = extract_batch_activations(
         r_samples + n_samples,

@@ -502,7 +502,7 @@ class TestSave:
     def test_save_vectors_creates_directory(self, tmp_path: Path) -> None:
         """save_steering_vectors should create output directory if needed."""
         vectors = {0: Tensor([1.0, 2.0])}
-        metadata = {"model_name": "test-model"}
+        metadata: dict[str, str | int | tuple[int, ...]] = {"model_name": "test-model"}
         output_file = tmp_path / "subdir" / "nested" / "vectors.pt"
 
         save_steering_vectors(vectors, metadata, output_file)
@@ -534,13 +534,13 @@ class TestSave:
     def test_save_vectors_overwrite(self, tmp_path: Path) -> None:
         """save_steering_vectors should handle existing files appropriately."""
         vectors = {0: Tensor([1.0, 2.0])}
-        metadata = {"model_name": "test-model"}
+        metadata: dict[str, str | int | tuple[int, ...]] = {"model_name": "test-model"}
         output_file = tmp_path / "test_vectors.pt"
 
         save_steering_vectors(vectors, metadata, output_file)
 
         vectors2 = {0: Tensor([5.0, 6.0])}
-        metadata2 = {"model_name": "updated-model"}
+        metadata2: dict[str, str | int | tuple[int, ...]] = {"model_name": "updated-model"}
         save_steering_vectors(vectors2, metadata2, output_file)
 
         loaded = torch.load(output_file, weights_only=True)
@@ -609,12 +609,8 @@ class TestPipeline:
         mock_model = self._create_mock_model(hidden_dim=64, seq_len=4, num_layers=12)
         mock_tokenizer = self._create_mock_tokenizer(seq_len=4)
 
-        with (
-            patch("probing_reflection.steering_vectors.AutoModelForCausalLM") as mock_model_cls,
-            patch("probing_reflection.steering_vectors.AutoTokenizer") as mock_tokenizer_cls,
-        ):
-            mock_model_cls.from_pretrained.return_value = mock_model
-            mock_tokenizer_cls.from_pretrained.return_value = mock_tokenizer
+        with patch("probing_reflection.steering_vectors.load_model") as mock_load_model:
+            mock_load_model.return_value = (mock_model, mock_tokenizer)
 
             result = extract_steering_vectors(config)
 
@@ -663,12 +659,8 @@ class TestPipeline:
         mock_model = self._create_mock_model(hidden_dim=hidden_dim, seq_len=3, num_layers=5)
         mock_tokenizer = self._create_mock_tokenizer(seq_len=3)
 
-        with (
-            patch("probing_reflection.steering_vectors.AutoModelForCausalLM") as mock_model_cls,
-            patch("probing_reflection.steering_vectors.AutoTokenizer") as mock_tokenizer_cls,
-        ):
-            mock_model_cls.from_pretrained.return_value = mock_model
-            mock_tokenizer_cls.from_pretrained.return_value = mock_tokenizer
+        with patch("probing_reflection.steering_vectors.load_model") as mock_load_model:
+            mock_load_model.return_value = (mock_model, mock_tokenizer)
 
             result = extract_steering_vectors(config)
 
@@ -715,12 +707,8 @@ class TestPipeline:
         mock_model = self._create_mock_model(hidden_dim=64, seq_len=3, num_layers=15)
         mock_tokenizer = self._create_mock_tokenizer(seq_len=3)
 
-        with (
-            patch("probing_reflection.steering_vectors.AutoModelForCausalLM") as mock_model_cls,
-            patch("probing_reflection.steering_vectors.AutoTokenizer") as mock_tokenizer_cls,
-        ):
-            mock_model_cls.from_pretrained.return_value = mock_model
-            mock_tokenizer_cls.from_pretrained.return_value = mock_tokenizer
+        with patch("probing_reflection.steering_vectors.load_model") as mock_load_model:
+            mock_load_model.return_value = (mock_model, mock_tokenizer)
 
             result = extract_steering_vectors(config)
 
@@ -768,20 +756,13 @@ class TestPipeline:
         mock_model = self._create_mock_model(hidden_dim=32, seq_len=3, num_layers=5)
         mock_tokenizer = self._create_mock_tokenizer(seq_len=3)
 
-        with (
-            patch("probing_reflection.steering_vectors.AutoModelForCausalLM") as mock_model_cls,
-            patch("probing_reflection.steering_vectors.AutoTokenizer") as mock_tokenizer_cls,
-        ):
-            mock_model_cls.from_pretrained.return_value = mock_model
-            mock_tokenizer_cls.from_pretrained.return_value = mock_tokenizer
+        with patch("probing_reflection.steering_vectors.load_model") as mock_load_model:
+            mock_load_model.return_value = (mock_model, mock_tokenizer)
 
             extract_steering_vectors(config)
 
-            mock_model_cls.from_pretrained.assert_called_once()
-            call_args = mock_model_cls.from_pretrained.call_args
-            assert call_args[0][0] == "custom-model-path"
-            assert "torch_dtype" in call_args[1]
-            mock_tokenizer_cls.from_pretrained.assert_called_once_with("custom-model-path")
+            mock_load_model.assert_called_once()
+            assert mock_load_model.call_args.args[0] == "custom-model-path"
 
     def test_pipeline_logging(self, tmp_path: Path) -> None:
         """extract_steering_vectors should log progress during extraction."""
@@ -822,12 +803,8 @@ class TestPipeline:
         mock_model = self._create_mock_model(hidden_dim=32, seq_len=3, num_layers=5)
         mock_tokenizer = self._create_mock_tokenizer(seq_len=3)
 
-        with (
-            patch("probing_reflection.steering_vectors.AutoModelForCausalLM") as mock_model_cls,
-            patch("probing_reflection.steering_vectors.AutoTokenizer") as mock_tokenizer_cls,
-        ):
-            mock_model_cls.from_pretrained.return_value = mock_model
-            mock_tokenizer_cls.from_pretrained.return_value = mock_tokenizer
+        with patch("probing_reflection.steering_vectors.load_model") as mock_load_model:
+            mock_load_model.return_value = (mock_model, mock_tokenizer)
 
             result = extract_steering_vectors(config)
 
