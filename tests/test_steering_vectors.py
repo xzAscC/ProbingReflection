@@ -414,6 +414,57 @@ class TestBatch:
         assert len(r_acts[0]) == 1
         assert len(n_acts[0]) == 1
 
+    def test_batch_oom_does_not_duplicate_successful_samples(self) -> None:
+        samples: list[SampleWithReflection] = [
+            {
+                "problem_id": "r1",
+                "problem": "test",
+                "generated": "Wait, first.",
+                "reference_answer": "answer",
+                "reflection_tokens": [],
+                "reflection_count": 1,
+                "reflection_density": 0.1,
+            },
+            {
+                "problem_id": "r2",
+                "problem": "test",
+                "generated": "Wait, second.",
+                "reference_answer": "answer",
+                "reflection_tokens": [],
+                "reflection_count": 1,
+                "reflection_density": 0.1,
+            },
+            {
+                "problem_id": "n1",
+                "problem": "test",
+                "generated": "Simple.",
+                "reference_answer": "answer",
+                "reflection_tokens": [],
+                "reflection_count": 0,
+                "reflection_density": 0.0,
+            },
+        ]
+        tokenizer = MagicMock()
+        tokenizer.encode.return_value = [1]
+        successful = {0: torch.ones(4)}
+
+        with (
+            patch(
+                "probing_reflection.steering_vectors.find_reflection_token_position",
+                return_value=0,
+            ),
+            patch(
+                "probing_reflection.steering_vectors.extract_activation_at_position",
+                side_effect=[successful, torch.cuda.OutOfMemoryError(), successful],
+            ),
+        ):
+            r_acts, n_acts = extract_batch_activations(
+                samples, MagicMock(), tokenizer, (0,), batch_size=2
+            )
+
+        assert len(r_acts[0]) == 1
+        assert len(n_acts[0]) == 1
+
 
 class TestDiffMeans:
     """Tests for compute_difference_in_means function."""

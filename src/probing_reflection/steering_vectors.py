@@ -221,6 +221,7 @@ def extract_batch_activations(
     tokenizer: PreTrainedTokenizerBase,
     layer_indices: tuple[int, ...],
     batch_size: int = 4,
+    min_samples: int = 1,
 ) -> tuple[dict[int, list[Tensor]], dict[int, list[Tensor]]]:
     """Extract activations from samples in batches.
 
@@ -237,7 +238,7 @@ def extract_batch_activations(
     Returns:
         Tuple of (R_activations_by_layer, N_activations_by_layer)
     """
-    r_samples, n_samples = classify_samples(samples, min_samples=1)
+    r_samples, n_samples = classify_samples(samples, min_samples=min_samples)
 
     r_activations: dict[int, list[Tensor]] = {layer: [] for layer in layer_indices}
     n_activations: dict[int, list[Tensor]] = {layer: [] for layer in layer_indices}
@@ -246,67 +247,39 @@ def extract_batch_activations(
         batch_end = min(batch_start + batch_size, len(r_samples))
         batch = r_samples[batch_start:batch_end]
 
-        try:
-            for sample in batch:
-                text = sample["generated"]
-                position = find_reflection_token_position(tokenizer, text)
-                if position is None:
-                    logger.warning(f"Reflection token not found for sample {sample['problem_id']}")
-                    continue
-
+        for sample in batch:
+            text = sample["generated"]
+            position = find_reflection_token_position(tokenizer, text)
+            if position is None:
+                logger.warning(f"Reflection token not found for sample {sample['problem_id']}")
+                continue
+            try:
                 activations = extract_activation_at_position(
                     model, tokenizer, text, position, layer_indices
                 )
                 for layer, tensor in activations.items():
                     r_activations[layer].append(tensor.cpu())
-        except torch.cuda.OutOfMemoryError:
-            torch.cuda.empty_cache()
-            for sample in batch:
-                text = sample["generated"]
-                position = find_reflection_token_position(tokenizer, text)
-                if position is None:
-                    logger.warning(f"Reflection token not found for sample {sample['problem_id']}")
-                    continue
-                try:
-                    activations = extract_activation_at_position(
-                        model, tokenizer, text, position, layer_indices
-                    )
-                    for layer, tensor in activations.items():
-                        r_activations[layer].append(tensor.cpu())
-                except torch.cuda.OutOfMemoryError:
-                    torch.cuda.empty_cache()
-                    logger.warning(f"CUDA OOM for R sample {sample['problem_id']}, skipping")
+            except torch.cuda.OutOfMemoryError:
+                torch.cuda.empty_cache()
+                logger.warning(f"CUDA OOM for R sample {sample['problem_id']}, skipping")
 
     for batch_start in tqdm(range(0, len(n_samples), batch_size), desc="Extracting N activations"):
         batch_end = min(batch_start + batch_size, len(n_samples))
         batch = n_samples[batch_start:batch_end]
 
-        try:
-            for sample in batch:
-                text = sample["generated"]
-                tokens = tokenizer.encode(text, add_special_tokens=False)
-                position = len(tokens) - 1
-
+        for sample in batch:
+            text = sample["generated"]
+            tokens = tokenizer.encode(text, add_special_tokens=False)
+            position = len(tokens) - 1
+            try:
                 activations = extract_activation_at_position(
                     model, tokenizer, text, position, layer_indices
                 )
                 for layer, tensor in activations.items():
                     n_activations[layer].append(tensor.cpu())
-        except torch.cuda.OutOfMemoryError:
-            torch.cuda.empty_cache()
-            for sample in batch:
-                text = sample["generated"]
-                tokens = tokenizer.encode(text, add_special_tokens=False)
-                position = len(tokens) - 1
-                try:
-                    activations = extract_activation_at_position(
-                        model, tokenizer, text, position, layer_indices
-                    )
-                    for layer, tensor in activations.items():
-                        n_activations[layer].append(tensor.cpu())
-                except torch.cuda.OutOfMemoryError:
-                    torch.cuda.empty_cache()
-                    logger.warning(f"CUDA OOM for N sample {sample['problem_id']}, skipping")
+            except torch.cuda.OutOfMemoryError:
+                torch.cuda.empty_cache()
+                logger.warning(f"CUDA OOM for N sample {sample['problem_id']}, skipping")
 
     return r_activations, n_activations
 
@@ -327,8 +300,9 @@ def extract_steering_vectors(config: ExtractVectorsConfig) -> SteeringVectorResu
 
     logger.info(f"Loaded {len(samples)} samples from {config.input_path}")
 
-    r_samples, n_samples = classify_samples(samples, config.min_samples)
-    logger.info(f"Classified: {len(r_samples)} R samples, {len(n_samples)} N samples")
+    r_count = sum(sample["reflection_count"] > 0 for sample in samples)
+    n_count = len(samples) - r_count
+    logger.info(f"Classified: {r_count} R samples, {n_count} N samples")
 
     device = get_device()
     dtype = get_dtype(device)
@@ -337,11 +311,12 @@ def extract_steering_vectors(config: ExtractVectorsConfig) -> SteeringVectorResu
     model, tokenizer = load_model(config.model_name, device, dtype)
 
     r_activations, n_activations = extract_batch_activations(
-        r_samples + n_samples,
+        samples,
         model,
         tokenizer,
         config.layer_indices,
         config.batch_size,
+        config.min_samples,
     )
 
     vectors = compute_difference_in_means(r_activations, n_activations, config.layer_indices)
@@ -349,8 +324,8 @@ def extract_steering_vectors(config: ExtractVectorsConfig) -> SteeringVectorResu
     metadata: dict[str, str | int | tuple[int, ...]] = {
         "model_name": config.model_name,
         "layer_indices": config.layer_indices,
-        "r_count": len(r_samples),
-        "n_count": len(n_samples),
+        "r_count": r_count,
+        "n_count": n_count,
         "timestamp": datetime.now().isoformat(),
     }
 
