@@ -11,13 +11,15 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import torch
 
 from probing_reflection.evaluation import (
-    LLMJudge,
     evaluate,
     extract_boxed_answer,
     generate_report,
 )
+from probing_reflection.judges import AnswerJudge
+from probing_reflection.prompts import build_comparison_prompt
 from probing_reflection.types import EvaluationConfig, EvaluationResult
 
 
@@ -61,13 +63,12 @@ class TestExtractBoxedAnswer:
         assert result == r"\sqrt{x^2 + y^2}"
 
 
-class TestLLMJudgeBuildPrompt:
-    """Tests for LLMJudge prompt building."""
+class TestAnswerJudgeBuildPrompt:
+    """Tests for AnswerJudge prompt building."""
 
     def test_build_prompt_format(self) -> None:
         """Prompt should contain verbosity bias warning."""
-        judge = LLMJudge("test-model")
-        prompt = judge.build_prompt("ref answer", "model answer")
+        prompt = build_comparison_prompt("ref answer", "model answer")
 
         assert "Reference: ref answer" in prompt
         assert "Candidate: model answer" in prompt
@@ -79,32 +80,44 @@ class TestLLMJudgeBuildPrompt:
 
     def test_build_prompt_json_format(self) -> None:
         """Prompt should specify JSON output format."""
-        judge = LLMJudge("test-model")
-        prompt = judge.build_prompt("A", "B")
+        prompt = build_comparison_prompt("A", "B")
 
         assert "JSON format" in prompt
         assert "true/false" in prompt
         assert "0.0-1.0" in prompt
 
 
-class TestLLMJudgeParseJson:
-    """Tests for LLMJudge JSON parsing."""
+class TestAnswerJudgeParseJson:
+    """Tests for AnswerJudge JSON parsing."""
 
     def test_parse_json_response_valid(self) -> None:
         """Valid JSON response should be parsed correctly."""
-        judge = LLMJudge("test-model")
+        judge = AnswerJudge("test-model")
 
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
         judge.model = mock_model
         judge.tokenizer = mock_tokenizer
-        judge.device = MagicMock()
+        judge.device = "cpu"
 
-        prompt = judge.build_prompt("42", "42")
+        prompt = build_comparison_prompt("42", "42")
         json_response = '{"explanation": "Both are 42", "equivalent": true, "confidence": 0.95}'
+
+        # Setup mock tokenizer behavior
+        mock_input_ids = MagicMock()
+        mock_attention_mask = MagicMock()
+        mock_input_ids.to.return_value = mock_input_ids
+        mock_attention_mask.to.return_value = mock_attention_mask
+        mock_tokenizer.return_value = {
+            "input_ids": mock_input_ids,
+            "attention_mask": mock_attention_mask,
+        }
+
+        # Setup mock model.generate to return tensor-like output
+        mock_model.generate.return_value = torch.tensor([[1, 2, 3]])
+
+        # Setup tokenizer.decode to return the JSON response
         mock_tokenizer.decode.return_value = prompt + json_response
-        mock_tokenizer.return_value = {"input_ids": MagicMock(), "attention_mask": MagicMock()}
-        mock_model.generate.return_value = [MagicMock()]
 
         result = judge._run_comparison("42", "42")
 
@@ -114,7 +127,7 @@ class TestLLMJudgeParseJson:
 
     def test_parse_json_response_no_json(self) -> None:
         """Response without JSON should return parse error."""
-        judge = LLMJudge("test-model")
+        judge = AnswerJudge("test-model")
 
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
@@ -134,7 +147,7 @@ class TestLLMJudgeParseJson:
 
     def test_parse_json_response_invalid_json(self) -> None:
         """Response with invalid JSON should return parse error."""
-        judge = LLMJudge("test-model")
+        judge = AnswerJudge("test-model")
 
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
@@ -152,12 +165,12 @@ class TestLLMJudgeParseJson:
         assert result["equivalent"] is False
 
 
-class TestLLMJudgePositionBias:
-    """Tests for LLMJudge position bias mitigation."""
+class TestAnswerJudgePositionBias:
+    """Tests for AnswerJudge position bias mitigation."""
 
     def test_position_bias_mitigation(self) -> None:
         """Should detect and handle position bias."""
-        judge = LLMJudge("test-model")
+        judge = AnswerJudge("test-model")
 
         with patch.object(judge, "_run_comparison") as mock_run:
             # Forward order returns equivalent=True
@@ -179,7 +192,7 @@ class TestLLMJudgePositionBias:
 
     def test_position_bias_agreement(self) -> None:
         """Should return result when both orderings agree."""
-        judge = LLMJudge("test-model")
+        judge = AnswerJudge("test-model")
 
         with patch.object(judge, "_run_comparison") as mock_run:
             mock_run.side_effect = [
@@ -193,12 +206,12 @@ class TestLLMJudgePositionBias:
             assert result["explanation"] == "Same answer"
 
 
-class TestLLMJudgeConfidenceThreshold:
-    """Tests for LLMJudge confidence threshold."""
+class TestAnswerJudgeConfidenceThreshold:
+    """Tests for AnswerJudge confidence threshold."""
 
     def test_confidence_threshold_applied(self) -> None:
         """Low confidence should set equivalent to False."""
-        judge = LLMJudge("test-model", confidence_threshold=0.7)
+        judge = AnswerJudge("test-model", confidence_threshold=0.7)
 
         with patch.object(judge, "_run_comparison") as mock_run:
             # Both orderings agree but with low confidence
@@ -214,7 +227,7 @@ class TestLLMJudgeConfidenceThreshold:
 
     def test_confidence_threshold_passed(self) -> None:
         """High confidence should preserve equivalent=True."""
-        judge = LLMJudge("test-model", confidence_threshold=0.7)
+        judge = AnswerJudge("test-model", confidence_threshold=0.7)
 
         with patch.object(judge, "_run_comparison") as mock_run:
             mock_run.side_effect = [
@@ -227,12 +240,12 @@ class TestLLMJudgeConfidenceThreshold:
             assert result["equivalent"] is True
 
 
-class TestLLMJudgeBatch:
-    """Tests for LLMJudge batch processing."""
+class TestAnswerJudgeBatch:
+    """Tests for AnswerJudge batch processing."""
 
     def test_judge_batch(self) -> None:
         """Batch judging should process all pairs."""
-        judge = LLMJudge("test-model")
+        judge = AnswerJudge("test-model")
 
         with patch.object(judge, "judge_single") as mock_single:
             mock_single.side_effect = [
@@ -407,8 +420,8 @@ class TestEvaluate:
         fixture_path = str(test_data_dir / "eval_sample.jsonl")
         config = EvaluationConfig(judge_model_name="test-model", confidence_threshold=0.5)
 
-        # Mock LLMJudge to avoid loading real model
-        with patch("probing_reflection.evaluation.LLMJudge") as mock_judge_class:
+        # Mock AnswerJudge to avoid loading real model
+        with patch("probing_reflection.evaluation.AnswerJudge") as mock_judge_class:
             mock_judge = MagicMock()
             mock_judge_class.return_value = mock_judge
 
@@ -452,7 +465,7 @@ class TestEvaluate:
 
         config = EvaluationConfig(judge_model_name="test-model")
 
-        with patch("probing_reflection.evaluation.LLMJudge") as mock_judge_class:
+        with patch("probing_reflection.evaluation.AnswerJudge") as mock_judge_class:
             mock_judge = MagicMock()
             mock_judge_class.return_value = mock_judge
 
@@ -494,7 +507,7 @@ class TestEvaluate:
 
         config = EvaluationConfig(judge_model_name="test-model")
 
-        with patch("probing_reflection.evaluation.LLMJudge") as mock_judge_class:
+        with patch("probing_reflection.evaluation.AnswerJudge") as mock_judge_class:
             mock_judge = MagicMock()
             mock_judge_class.return_value = mock_judge
 
@@ -514,13 +527,13 @@ class TestEvaluate:
             assert results_by_id["no_box"]["is_correct"] is False
 
 
-class TestLLMJudgeLoadModel:
-    """Tests for LLMJudge model loading."""
+class TestAnswerJudgeLoadModel:
+    """Tests for AnswerJudge model loading."""
 
     def test_load_model_not_called_in_tests(self) -> None:
         """load_model should not be called in unit tests (requires GPU)."""
         # This test verifies the pattern: we mock load_model, never call it for real
-        judge = LLMJudge("test-model")
+        judge = AnswerJudge("test-model")
 
         # Model should not be loaded initially
         assert judge.model is None
@@ -529,7 +542,7 @@ class TestLLMJudgeLoadModel:
 
     def test_run_comparison_without_load_raises(self) -> None:
         """_run_comparison should raise if model not loaded."""
-        judge = LLMJudge("test-model")
+        judge = AnswerJudge("test-model")
 
         with pytest.raises(RuntimeError, match="Model not loaded"):
             judge._run_comparison("A", "B")
