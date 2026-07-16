@@ -38,6 +38,7 @@ class InferenceConfig:
         batch_size: Batch size for inference.
         max_new_tokens: Maximum number of new tokens to generate.
         output_path: Path to save inference results.
+        limit: Optional maximum number of samples to process.
     """
 
     model_name: str = "Qwen/Qwen3.5-0.8B"
@@ -45,6 +46,7 @@ class InferenceConfig:
     batch_size: int = 8
     max_new_tokens: int = 256
     output_path: str = "outputs/math500_inference/qwen3-0.8b-math500-cot.jsonl"
+    limit: int | None = None
 
 
 @dataclass(frozen=True)

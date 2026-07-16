@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 import torch
-from datasets import load_dataset  # type: ignore[import-untyped]
+from datasets.load import load_dataset
 from tqdm import tqdm
 
-from probing_reflection.batch_utils import prepare_batch
-from probing_reflection.model_utils import load_model
+from probing_reflection.batch_utils import decode_generated_tokens, prepare_batch
+from probing_reflection.model_utils import GenerativeModel, load_model
 from probing_reflection.prompts import format_cot_prompt
 from probing_reflection.types import InferenceConfig
 
@@ -31,7 +32,13 @@ def run_inference(config: InferenceConfig) -> Path:
     Returns:
         Path to the output JSONL file.
     """
+    if config.batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    if config.limit is not None and config.limit < 0:
+        raise ValueError("limit must be non-negative")
+
     model, tokenizer = load_model(config.model_name)
+    generative_model = cast(GenerativeModel, model)
     dataset = load_dataset(config.dataset_name, split="test")
 
     output_path = Path(config.output_path)
@@ -40,6 +47,8 @@ def run_inference(config: InferenceConfig) -> Path:
     batch_size = config.batch_size
     results: list[dict[str, str | int]] = []
     num_samples = len(dataset)
+    if config.limit is not None:
+        num_samples = min(num_samples, config.limit)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -56,7 +65,7 @@ def run_inference(config: InferenceConfig) -> Path:
 
         try:
             with torch.no_grad():
-                outputs = model.generate(  # type: ignore[operator]
+                outputs = generative_model.generate(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     max_new_tokens=config.max_new_tokens,
@@ -72,7 +81,7 @@ def run_inference(config: InferenceConfig) -> Path:
                 single_mask = single_input["attention_mask"].to(device)
 
                 with torch.no_grad():
-                    output = model.generate(  # type: ignore[operator]
+                    output = generative_model.generate(
                         input_ids=single_ids,
                         attention_mask=single_mask,
                         max_new_tokens=config.max_new_tokens,
@@ -80,8 +89,7 @@ def run_inference(config: InferenceConfig) -> Path:
                         do_sample=False,
                     )
 
-                generated_text = tokenizer.decode(output[0], skip_special_tokens=True)
-                generated_text = str(generated_text)[len(prompt) :].strip()
+                generated_text = decode_generated_tokens(tokenizer, output[0], single_ids.shape[-1])
 
                 result_entry = {
                     "problem_id": item["unique_id"],
@@ -96,9 +104,8 @@ def run_inference(config: InferenceConfig) -> Path:
             continue
 
         for j, (output, item) in enumerate(zip(outputs, batch_items)):  # noqa: B905
-            generated_text = tokenizer.decode(output, skip_special_tokens=True)
             prompt = prompts[j]
-            generated_text = str(generated_text)[len(prompt) :].strip()
+            generated_text = decode_generated_tokens(tokenizer, output, input_ids.shape[-1])
 
             result_entry = {
                 "problem_id": item["unique_id"],

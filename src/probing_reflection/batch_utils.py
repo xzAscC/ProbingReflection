@@ -80,3 +80,12 @@ def get_item_field(item: Mapping[str, object], field_names: list[str], default: 
         if name in item:
             return str(item[name])
     return default
+
+
+def decode_generated_tokens(
+    tokenizer: PreTrainedTokenizerBase,
+    output_ids: torch.Tensor,
+    input_length: int,
+) -> str:
+    generated_ids = output_ids[input_length:]
+    return str(tokenizer.decode(generated_ids, skip_special_tokens=True)).strip()

@@ -60,6 +60,13 @@ def create_parser() -> argparse.ArgumentParser:
         default=None,
         help="Limit number of samples to process",
     )
+    inference_parser.add_argument("--model", default=InferenceConfig.model_name)
+    inference_parser.add_argument("--dataset", default=InferenceConfig.dataset_name)
+    inference_parser.add_argument("--batch-size", type=int, default=InferenceConfig.batch_size)
+    inference_parser.add_argument(
+        "--max-new-tokens", type=int, default=InferenceConfig.max_new_tokens
+    )
+    inference_parser.add_argument("--output", default=InferenceConfig.output_path)
 
     eval_parser = subparsers.add_parser(
         "evaluate",
@@ -186,9 +193,16 @@ def handle_evaluate(args: argparse.Namespace) -> None:
 def handle_inference(args: argparse.Namespace) -> None:
     """Run inference with parsed arguments."""
     limit = args.limit
-    config = InferenceConfig(batch_size=limit) if limit is not None else InferenceConfig()
+    config = InferenceConfig(
+        model_name=args.model,
+        dataset_name=args.dataset,
+        batch_size=args.batch_size,
+        max_new_tokens=args.max_new_tokens,
+        output_path=args.output,
+        limit=limit,
+    )
 
-    print(f"Running inference on {limit if limit else 'all'} samples...")
+    print(f"Running inference on {limit if limit is not None else 'all'} samples...")
     run_inference(config)
     print(f"Results saved to {config.output_path}")
 
@@ -250,8 +264,7 @@ def main() -> None:
     """Parse arguments and dispatch to appropriate subcommand."""
     parser = create_parser()
 
-    valid_commands = ("inference", "evaluate", "reflection-diagnose", "extract-vectors")
-    if len(sys.argv) == 1 or (len(sys.argv) > 1 and sys.argv[1] not in valid_commands):
+    if len(sys.argv) == 1:
         sys.argv.insert(1, "inference")
 
     args = parser.parse_args()

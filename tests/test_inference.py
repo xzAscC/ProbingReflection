@@ -89,9 +89,12 @@ class TestInference:
 
     def test_run_inference_mocked(self) -> None:
         """run_inference should work with mocked model and tokenizer."""
+        import json
         import os
         import tempfile
         from unittest.mock import MagicMock, patch
+
+        import torch
 
         from probing_reflection import InferenceConfig
         from probing_reflection.inference import run_inference
@@ -101,11 +104,33 @@ class TestInference:
             output_path = os.path.join(tmpdir, "test_output.jsonl")
 
             # Create InferenceConfig with the temp output path
-            config = InferenceConfig(output_path=output_path)
+            config = InferenceConfig(output_path=output_path, batch_size=1, limit=1)
 
             # Create mocks for model and tokenizer
             mock_model = MagicMock()
             mock_tokenizer = MagicMock()
+            mock_tokenizer.return_value = {
+                "input_ids": [[1, 2, 3]],
+                "attention_mask": [[1, 1, 1]],
+            }
+            mock_tokenizer.decode.return_value = "generated answer"
+            mock_model.generate.return_value = torch.tensor([[1, 2, 3, 9]])
+            mock_dataset = [
+                {
+                    "unique_id": "sample-1",
+                    "problem": "What is 2+2?",
+                    "answer": "4",
+                    "subject": "algebra",
+                    "level": 1,
+                },
+                {
+                    "unique_id": "sample-2",
+                    "problem": "What is 3+3?",
+                    "answer": "6",
+                    "subject": "algebra",
+                    "level": 1,
+                },
+            ]
 
             # Mock torch.cuda.is_available to return False (CPU mode)
             with (
@@ -114,9 +139,49 @@ class TestInference:
                     "probing_reflection.inference.load_model",
                     return_value=(mock_model, mock_tokenizer),
                 ),
+                patch("probing_reflection.inference.load_dataset", return_value=mock_dataset),
             ):
                 # Call run_inference
                 run_inference(config)
 
             # Verify output file was created
             assert os.path.exists(output_path), f"Output file should be created at {output_path}"
+            with open(output_path) as output_file:
+                records = [json.loads(line) for line in output_file]
+            assert len(records) == 1
+            assert records[0]["problem_id"] == "sample-1"
+            assert records[0]["generated"] == "generated answer"
+            decoded_ids = mock_tokenizer.decode.call_args.args[0]
+            assert decoded_ids.tolist() == [9]
+
+    def test_cli_limit_does_not_change_batch_size(self) -> None:
+        from argparse import Namespace
+        from unittest.mock import patch
+
+        from probing_reflection.__main__ import handle_inference
+        from probing_reflection.types import InferenceConfig
+
+        with patch("probing_reflection.__main__.run_inference") as mock_run:
+            handle_inference(
+                Namespace(
+                    limit=3,
+                    model=InferenceConfig.model_name,
+                    dataset=InferenceConfig.dataset_name,
+                    batch_size=InferenceConfig.batch_size,
+                    max_new_tokens=InferenceConfig.max_new_tokens,
+                    output=InferenceConfig.output_path,
+                )
+            )
+
+        config = mock_run.call_args.args[0]
+        assert config.limit == 3
+        assert config.batch_size == 8
+
+    def test_negative_limit_fails_before_model_loading(self) -> None:
+        import pytest
+
+        from probing_reflection import InferenceConfig
+        from probing_reflection.inference import run_inference
+
+        with pytest.raises(ValueError, match="limit must be non-negative"):
+            run_inference(InferenceConfig(limit=-1))
