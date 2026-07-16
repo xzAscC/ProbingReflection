@@ -2,15 +2,7 @@
 
 This module provides functions to train and evaluate linear probes that
 classify activations as coming from reflection (R) or non-reflection (N)
-samples. The probes use logistic regression on hidden state activations
-extracted at reflection token positions.
-
-The pipeline involves:
-1. Collecting activations from R and N sets at token positions
-2. Training LogisticRegression probes per layer
-3. Evaluating probe accuracy on held-out test data
-4. Visualizing activation separability with t-SNE/PCA
-5. Saving probe weights for later analysis
+samples.
 """
 
 from __future__ import annotations
@@ -21,7 +13,6 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-import torch
 from numpy import ndarray
 from sklearn.decomposition import PCA  # type: ignore[import-untyped]
 from sklearn.linear_model import LogisticRegression  # type: ignore[import-untyped]
@@ -29,14 +20,10 @@ from sklearn.manifold import TSNE  # type: ignore[import-untyped]
 from sklearn.model_selection import train_test_split  # type: ignore[import-untyped]
 from torch import Tensor
 from tqdm import tqdm
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    PreTrainedModel,
-    PreTrainedTokenizerBase,
-)
+from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
-from probing_reflection.reflection_diagnosis import REFLECTION_TAXONOMY
+from probing_reflection.model_utils import get_device, get_dtype, load_model
+from probing_reflection.prompts import REFLECTION_TAXONOMY
 from probing_reflection.steering_vectors import (
     extract_activation_at_position,
     find_reflection_token_position,
@@ -59,14 +46,6 @@ def collect_token_activations(
 ) -> tuple[dict[int, list[Tensor]], dict[int, list[Tensor]]]:
     """Extract activations from R set (reflection) and N set (non-reflection).
 
-    Splits samples into:
-    - R set: samples with reflection_count > 0 (extract at reflection token position)
-    - N set: samples with reflection_count == 0 (extract at any taxonomy token position)
-
-    For R samples: finds the first reflection token and extracts activation at that position.
-    For N samples: finds the first taxonomy token position (any reflection-related word)
-    and extracts activation there.
-
     Args:
         samples: List of samples with reflection analysis.
         model: The language model to extract activations from.
@@ -75,7 +54,6 @@ def collect_token_activations(
 
     Returns:
         Tuple of (r_activations_by_layer, n_activations_by_layer).
-        Each is a dict mapping layer index to list of activation tensors.
     """
     r_activations: dict[int, list[Tensor]] = {layer: [] for layer in layer_indices}
     n_activations: dict[int, list[Tensor]] = {layer: [] for layer in layer_indices}
@@ -117,35 +95,6 @@ def collect_token_activations(
     return r_activations, n_activations
 
 
-def evaluate_probe(
-    model: LogisticRegression,
-    x_test: ndarray,  # noqa: N803
-    y_test: ndarray,
-    layer_index: int,
-) -> ProbeMetrics:
-    """Compute accuracy and return metrics.
-
-    Evaluates the trained probe on test data and returns structured metrics.
-
-    Args:
-        model: Trained LogisticRegression model.
-        x_test: Test features (activations).
-        y_test: Test labels (1=R, 0=N).
-        layer_index: Layer index this probe corresponds to.
-
-    Returns:
-        ProbeMetrics with layer_index, accuracy, and sample counts.
-    """
-    accuracy = model.score(x_test, y_test)
-
-    return ProbeMetrics(
-        layer_index=layer_index,
-        accuracy=float(accuracy),
-        train_samples=0,
-        test_samples=len(y_test),
-    )
-
-
 def train_linear_probe(
     r_activations: dict[int, list[Tensor]],
     n_activations: dict[int, list[Tensor]],
@@ -154,23 +103,14 @@ def train_linear_probe(
 ) -> tuple[dict[int, LogisticRegression], list[ProbeMetrics]]:
     """Train LogisticRegression probes per layer.
 
-    For each layer:
-    1. Stack R and N activations into feature matrix X
-    2. Create labels y (1=R, 0=N)
-    3. Split into train/test with stratification
-    4. Train LogisticRegression
-    5. Evaluate on test set
-
     Args:
         r_activations: Dict mapping layer index to list of activation tensors (reflection).
         n_activations: Dict mapping layer index to list of activation tensors (non-reflection).
         layer_indices: Tuple of layer indices to train probes for.
-        test_size: Fraction of data to use for testing (default 0.2 for 80/20 split).
+        test_size: Fraction of data to use for testing.
 
     Returns:
         Tuple of (probes_by_layer, metrics_list).
-        probes_by_layer maps layer index to trained LogisticRegression model.
-        metrics_list contains ProbeMetrics for each layer.
     """
     probes: dict[int, LogisticRegression] = {}
     metrics: list[ProbeMetrics] = []
@@ -209,6 +149,21 @@ def train_linear_probe(
     return probes, metrics
 
 
+def evaluate_probe(
+    probe: LogisticRegression,
+    x_test: ndarray,
+    y_test: ndarray,
+    layer_index: int,
+) -> ProbeMetrics:
+    """Evaluate a fitted probe on held-out activations."""
+    return ProbeMetrics(
+        layer_index=layer_index,
+        accuracy=float(probe.score(x_test, y_test)),
+        train_samples=0,
+        test_samples=len(y_test),
+    )
+
+
 def generate_tsne_plot(
     r_activations: dict[int, list[Tensor]],
     n_activations: dict[int, list[Tensor]],
@@ -217,15 +172,11 @@ def generate_tsne_plot(
 ) -> None:
     """Generate t-SNE scatter plot.
 
-    Combines R and N activations for a specific layer, applies t-SNE
-    dimensionality reduction, and creates a scatter plot with different
-    colors for each class.
-
     Args:
         r_activations: Dict mapping layer index to list of activation tensors (reflection).
         n_activations: Dict mapping layer index to list of activation tensors (non-reflection).
         output_path: Path to save the PNG file.
-        layer_index: Which layer to visualize (default 0).
+        layer_index: Which layer to visualize.
     """
     import matplotlib.pyplot as plt
 
@@ -282,15 +233,11 @@ def generate_pca_plot(
 ) -> None:
     """Generate PCA scatter plot.
 
-    Combines R and N activations for a specific layer, applies PCA
-    dimensionality reduction, and creates a scatter plot with different
-    colors for each class.
-
     Args:
         r_activations: Dict mapping layer index to list of activation tensors (reflection).
         n_activations: Dict mapping layer index to list of activation tensors (non-reflection).
         output_path: Path to save the PNG file.
-        layer_index: Which layer to visualize (default 0).
+        layer_index: Which layer to visualize.
     """
     import matplotlib.pyplot as plt
 
@@ -347,9 +294,6 @@ def save_probe_weights(
 ) -> None:
     """Save probe coefficients and metadata to .npz.
 
-    Saves the trained probe weights (coefficients and intercepts) along
-    with metrics and metadata to a numpy .npz file for later loading.
-
     Args:
         probes: Dict mapping layer index to trained LogisticRegression model.
         metrics: List of ProbeMetrics for each layer.
@@ -362,8 +306,8 @@ def save_probe_weights(
     save_arrays: dict[str, ndarray] = {}
 
     for layer, probe in probes.items():
-        save_arrays[f"coef_layer_{layer}"] = probe.coef_
-        save_arrays[f"intercept_layer_{layer}"] = probe.intercept_
+        save_arrays[f"coef_layer_{layer}"] = np.asarray(probe.coef_)
+        save_arrays[f"intercept_layer_{layer}"] = np.asarray(probe.intercept_)
 
     layer_indices_arr = np.array([m["layer_index"] for m in metrics], dtype=np.int32)
     accuracies = np.array([m["accuracy"] for m in metrics], dtype=np.float64)
@@ -391,15 +335,6 @@ def save_probe_weights(
 def run_linear_probe(config: LinearProbeConfig) -> LinearProbeResult:
     """Run the full linear probe pipeline.
 
-    Pipeline:
-    1. Load samples from input_path
-    2. Load model and tokenizer
-    3. Collect token activations (R and N sets)
-    4. Train linear probes per layer
-    5. Evaluate probes
-    6. Generate visualizations (t-SNE, PCA)
-    7. Save probe weights
-
     Args:
         config: LinearProbeConfig with all pipeline parameters.
 
@@ -413,14 +348,11 @@ def run_linear_probe(config: LinearProbeConfig) -> LinearProbeResult:
 
     logger.info(f"Loaded {len(samples)} samples from {config.input_path}")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
+    device = get_device()
+    dtype = get_dtype(device)
 
     logger.info(f"Loading model {config.model_name} on {device} with dtype {dtype}")
-    tokenizer = AutoTokenizer.from_pretrained(config.model_name)
-    model = AutoModelForCausalLM.from_pretrained(config.model_name, torch_dtype=dtype)
-    model.eval()  # type: ignore[no-untyped-call]
-    model = model.to(device)  # type: ignore[arg-type]
+    model, tokenizer = load_model(config.model_name, device, dtype)
 
     r_activations, n_activations = collect_token_activations(
         samples, model, tokenizer, config.layer_indices
