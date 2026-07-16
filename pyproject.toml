@@ -48,6 +48,7 @@ python_version = "3.12"
 strict = true
 warn_return_any = true
 warn_unused_ignores = true
+follow_untyped_imports = true
 packages = ["probing_reflection"]
 mypy_path = "src"
 
