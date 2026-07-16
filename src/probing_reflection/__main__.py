@@ -1,5 +1,7 @@
 """Entry point for running inference and evaluation from command line."""
 
+from __future__ import annotations
+
 import argparse
 import json
 import sys
@@ -23,14 +25,7 @@ from probing_reflection.types import (
 
 
 def format_report(report: EvaluationReport) -> str:
-    """Format evaluation report for console output.
-
-    Args:
-        report: The evaluation report to format.
-
-    Returns:
-        Formatted string for console display.
-    """
+    """Format evaluation report for console output."""
     lines = [
         "=== Evaluation Report ===",
         f"Overall Accuracy: {report['overall_accuracy']:.2%} "
@@ -48,11 +43,7 @@ def format_report(report: EvaluationReport) -> str:
 
 
 def create_parser() -> argparse.ArgumentParser:
-    """Create argument parser with subcommands.
-
-    Returns:
-        Configured ArgumentParser instance.
-    """
+    """Create argument parser with subcommands."""
     parser = argparse.ArgumentParser(
         prog="probing_reflection",
         description="Probing and steering self-reflection in language models",
@@ -119,13 +110,13 @@ def create_parser() -> argparse.ArgumentParser:
         "--output-dir",
         "-o",
         default="outputs/reflection_analysis/",
-        help="Output directory for analysis results (default: outputs/reflection_analysis/)",
+        help="Output directory for analysis results",
     )
     diagnose_parser.add_argument(
         "--model",
         "-m",
         default="Qwen/Qwen3.5-27B",
-        help="Judge model name (default: Qwen/Qwen3.5-27B)",
+        help="Judge model name",
     )
 
     extract_parser = subparsers.add_parser(
@@ -142,7 +133,7 @@ def create_parser() -> argparse.ArgumentParser:
         "--model",
         "-m",
         default="Qwen/Qwen2.5-0.5B",
-        help="Model name (default: Qwen/Qwen2.5-0.5B)",
+        help="Model name",
     )
     extract_parser.add_argument(
         "--layers",
@@ -154,31 +145,27 @@ def create_parser() -> argparse.ArgumentParser:
         "--output",
         "-o",
         default="steering_vectors.pt",
-        help="Output .pt file path (default: steering_vectors.pt)",
+        help="Output .pt file path",
     )
     extract_parser.add_argument(
         "--min-samples",
         type=int,
         default=10,
-        help="Minimum samples in R/N sets (default: 10)",
+        help="Minimum samples in R/N sets",
     )
     extract_parser.add_argument(
         "--batch-size",
         "-b",
         type=int,
         default=4,
-        help="Batch size for extraction (default: 4)",
+        help="Batch size for extraction",
     )
 
     return parser
 
 
 def handle_evaluate(args: argparse.Namespace) -> None:
-    """Run evaluation with parsed arguments.
-
-    Args:
-        args: Parsed command line arguments.
-    """
+    """Run evaluation with parsed arguments."""
     config = EvaluationConfig(
         judge_model_name=args.model,
         batch_size=args.batch_size,
@@ -197,11 +184,7 @@ def handle_evaluate(args: argparse.Namespace) -> None:
 
 
 def handle_inference(args: argparse.Namespace) -> None:
-    """Run inference with parsed arguments.
-
-    Args:
-        args: Parsed command line arguments.
-    """
+    """Run inference with parsed arguments."""
     limit = args.limit
     config = InferenceConfig(batch_size=limit) if limit is not None else InferenceConfig()
 
@@ -211,11 +194,7 @@ def handle_inference(args: argparse.Namespace) -> None:
 
 
 def handle_reflection_diagnose(args: argparse.Namespace) -> None:
-    """Run reflection diagnosis with parsed arguments.
-
-    Args:
-        args: Parsed command line arguments.
-    """
+    """Run reflection diagnosis with parsed arguments."""
     config = ReflectionDiagnosisConfig(
         input_path=args.input,
         output_dir=args.output_dir,
@@ -245,11 +224,7 @@ def handle_reflection_diagnose(args: argparse.Namespace) -> None:
 
 
 def handle_extract_vectors(args: argparse.Namespace) -> None:
-    """Run steering vector extraction with parsed arguments.
-
-    Args:
-        args: Parsed command line arguments.
-    """
+    """Run steering vector extraction with parsed arguments."""
     layer_indices = tuple(int(x.strip()) for x in args.layers.split(","))
 
     config = ExtractVectorsConfig(
