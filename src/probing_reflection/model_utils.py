@@ -10,6 +10,7 @@ and provide memory management for GPU resources.
 from __future__ import annotations
 
 import gc
+from typing import Protocol, cast
 
 import torch
 from transformers import (
@@ -19,6 +20,27 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
 )
+
+
+class GenerativeModel(Protocol):
+    def generate(self, **kwargs: object) -> torch.Tensor: ...
+
+
+class ModelLifecycle(Protocol):
+    def eval(self) -> object: ...
+
+    def to(self, device: torch.device) -> object: ...
+
+
+class QuantizationConfigFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        load_in_4bit: bool,
+        bnb_4bit_quant_type: str,
+        bnb_4bit_compute_dtype: torch.dtype,
+        bnb_4bit_use_double_quant: bool,
+    ) -> BitsAndBytesConfig: ...
 
 
 def get_device() -> torch.device:
@@ -83,9 +105,13 @@ def load_model(
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     setup_tokenizer(tokenizer)
 
-    model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype)
-    model.eval()  # type: ignore[no-untyped-call]
-    model = model.to(device)  # type: ignore[arg-type]
+    model = cast(
+        PreTrainedModel,
+        AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype),
+    )
+    lifecycle = cast(ModelLifecycle, model)
+    lifecycle.eval()
+    lifecycle.to(device)
 
     return model, tokenizer
 
@@ -104,7 +130,8 @@ def load_model_4bit(
     Returns:
         Tuple of (model, tokenizer).
     """
-    bnb_config = BitsAndBytesConfig(  # type: ignore[no-untyped-call]
+    config_factory = cast(QuantizationConfigFactory, BitsAndBytesConfig)
+    bnb_config = config_factory(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
         bnb_4bit_compute_dtype=torch.bfloat16,
@@ -114,12 +141,15 @@ def load_model_4bit(
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     setup_tokenizer(tokenizer)
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        quantization_config=bnb_config,
-        device_map="auto",
+    model = cast(
+        PreTrainedModel,
+        AutoModelForCausalLM.from_pretrained(
+            model_name,
+            quantization_config=bnb_config,
+            device_map="auto",
+        ),
     )
-    model.eval()  # type: ignore[no-untyped-call]
+    cast(ModelLifecycle, model).eval()
 
     return model, tokenizer
 
